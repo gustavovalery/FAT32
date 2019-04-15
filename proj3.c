@@ -8,12 +8,19 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#define LBA_BEGIN 0
 
-/* Prototypes! */
-int my_exit(int status);
+
+typedef struct{
+	char** tokens;
+	int numTokens;
+	char c;
+}instruction;
 
 typedef struct Boot_Sector_Info{
+	//this is still a hex value
 	unsigned char BS_jmpBoot[3];
+	//this is a string
 	unsigned char BS_OEMName[8];
 
 	uint16_t BPB_BytesPerSec;
@@ -23,13 +30,10 @@ typedef struct Boot_Sector_Info{
 	uint16_t BPB_RootEntCnt;
 	uint16_t BPB_TotSec16;
 	uint8_t BPB_Media;
-
-	/*THIS VALUE MUST BE ZERO FOR FAT32 SYSTEMS*/
 	uint16_t BPB_FATSz16;
-
 	uint16_t BPB_SecPerTrk;
 	uint16_t BPB_NumHeads;
-	int32_t BPB_HiddSec;
+	uint32_t BPB_HiddSec;
 	uint32_t BPB_TotSec32;
 
 	/*START OF SECOND TABLE FOR FAT32*/
@@ -39,67 +43,374 @@ typedef struct Boot_Sector_Info{
 	uint32_t BPB_RootClus;
 	uint16_t BPB_FSInfo;
 	uint16_t BPB_BkBootSec;
-	/*UNSURE ABOUT THIS ONE, IS 12 BYTES OR 96 BITS*/
+	//read in 12 bytes of ints as unsigned chars and later print with "%02X"
 	unsigned char BPB_Reserved[12];
+
 	uint8_t BS_DrvNum;
 	uint8_t BS_Reserved1;
 	uint8_t BS_BootSig;
 	uint32_t BS_VolID;
+	//this is a string but represented in hex
 	unsigned char BS_VolLab[11];
+	//this is also a string but represented in hex
 	unsigned char BS_FilSysType[8];
-
 } __attribute__((packed)) boot_sector_info;
 
+typedef struct Dir_Info{
+	unsigned char filename[11];
+	uint8_t attribute;
+	uint8_t skip1[8];
+	uint16_t high_cluster;
+	uint8_t skip2[4];
+	uint16_t low_cluster;
+	uint32_t file_size;
+} __attribute__((packed)) dir_info; 
+
+typedef struct File_Info{
+	unsigned char filename[11];
+	uint8_t attribute;
+	uint16_t hi_cluster;
+	uint16_t lo_cluster;
+	uint32_t file_size;
+} __attribute__((packed)) file_info;
+
+int i;
+uint32_t DWORD;
+uint8_t SecBuff[4];
+uint32_t nextClusNum;
+
+
+/* Prototypes! */
+int my_exit(int status, FILE *fptr);
+int ls_dir();
+void info(boot_sector_info BSI);
+void addToken(instruction* instr_ptr, char* tok);
+void printTokens(instruction* instr_ptr);
+void clearInstruction(instruction* instr_ptr);
+unsigned long fat_begin_lba(boot_sector_info BSI);
+unsigned long cluster_begin_lba(boot_sector_info BSI);
+int my_exit(int status, FILE *fptr);
+void print_dir_info(dir_info DI);
+unsigned long lba_addr(int cluster_number, boot_sector_info BSI);
+void print_file_info(file_info FI);
+unsigned long find_first_data_sector(boot_sector_info BSI);
+unsigned long find_first_sector_of_cluster(boot_sector_info BSI, int N);
+int count_sectors_in_data_region(boot_sector_info BSI);
+uint32_t find_FAT_sector_number(boot_sector_info BSI, int N);
+int find_FAT_entry_offset(boot_sector_info BSI, int N);
+
+/*---------------------------------------------------------*/
 
 int main(int argc, char *argv[]){
-	
+	char* token = NULL;
+	char* temp = NULL;
+
+	instruction instr;
+	instr.tokens = NULL;
+	instr.numTokens = 0;
+
+	if(argc < 2){
+		printf("ERROR: wrong number of arguments!\n");
+		exit(1);
+	}
+
+	printf("%s was the argument\n\n",argv[1]);
+
 	FILE *fptr;
-	char buffer[2048] = {0};
-	int n = 0;
 	struct Boot_Sector_Info BSI;
+	struct Dir_Info DI;
+	struct File_Info FI;
 
 	fptr = fopen(argv[1],"rb");
 
-	if(fptr){
-		printf("fptr is valid\n\n");
+	if(!fptr){
+		printf("ERROR: fptr is invalid!\n\n");
+		my_exit(1, fptr);
 	}
 
+	/*using fread() on ((packed)) struct does most of the work for you*/
 	fread(&BSI, sizeof(struct Boot_Sector_Info), 1, fptr);
 
-	/*FOR TESTING PURPOSES - DELETE LATER*/
-	printf("Jump Boot: %s\n", BSI.BS_jmpBoot);
-	printf("OEMName: %s\n", BSI.BS_OEMName);
-	printf("Bytes per Section: %d\n", BSI.BPB_BytesPerSec);
+	while(1){
+		printf("\nPlease enter an instruction: ");
 
-	fclose(fptr);
+		do {// loop reads character sequences separated by whitespace
 
+			//scans for next token and allocates token var to size of scanned token
+			scanf( "%ms", &token);
+			//allocate temp variable with same size as token
+			temp = (char*)malloc((strlen(token)+1) * sizeof(char));
+			int i;
+			int start;
 
-	/*	
-	char arr[10];
-	if(argc < 2){
-		printf("ERROR: wrong number of arguments!\n");
-		my_exit(1);
+			start = 0;
+
+			for (i = 0; i < strlen(token); i++){
+				//pull out special characters and make them into a separate token in the instruction
+				if (token[i] == '|' || token[i] == '>' || token[i] == '<' || token[i] == '&') {
+					if (i-start > 0){
+						memcpy(temp, token + start, i - start);
+						temp[i-start] = '\0';
+						addToken(&instr, temp);						
+					}
+
+					char specialChar[2];
+					specialChar[0] = token[i];
+					specialChar[1] = '\0';
+
+					addToken(&instr,specialChar);
+
+					start = i + 1;
+				}
+			}
+			if (start < strlen(token)){
+				memcpy(temp, token + start, strlen(token) - start);
+				temp[i-start] = '\0';
+				addToken(&instr, temp);			
+			}
+
+			//free and reset variables
+			free(token);
+			free(temp);
+
+			token = NULL;
+			temp = NULL;
+
+		}while('\n' != getchar());    //until end of line is reached
+
+		printTokens(&instr);
+
+		if((strcmp(instr.tokens[0], "info")) == 0){
+			info(BSI);
+		}
+		else if((strcmp(instr.tokens[0], "exit")) == 0){
+			my_exit(0, fptr);
+		}
+		else if((strcmp(instr.tokens[0],"test")) == 0){
+			nextClusNum = find_FAT_sector_number(BSI, 2) * BSI.BPB_BytesPerSec + find_FAT_entry_offset(BSI, 2); 
+			fseek(fptr, nextClusNum, SEEK_SET);
+			fread(&SecBuff, 1, 4, fptr);
+
+			for(i = 0; i < 4; i++){
+				printf("%02X", SecBuff[i]);
+			}
+
+			printf("\n");
+		
+			/*
+			unsigned int offset = lba_addr(3, BSI);
+			fseek(fptr,offset, SEEK_SET);
+			fread(&DI,sizeof(struct Dir_Info),1,fptr);
+			print_dir_info(DI);
+			*/
+		}
+		else{
+			clearInstruction(&instr);
+		}
+
+		clearInstruction(&instr);
 	}
-
-	printf("%s was the argument\n",argv[1]);
-
-	if ((fptr = fopen(argv[1],"rb")) == NULL){
-		printf("ERROR: could not open file\n");
-		my_exit(1);
-	}
-	
-	fgets(arr, 10, fptr);
-	printf("%s\n",arr);	
-	fclose(fptr);
-	*/
-
-	my_exit(0);
-return 0;
+	my_exit(0, fptr);
+	return 0;
 }
 
 
-int my_exit(int status){
-/*exit the program and clean up space*/
-	printf("\n*+*+*+calling my_exit with status*+*+*+ %d\n",status);
+/*---------------------------------PART 1: EXIT[2] ---------------------------------------------------*/
+int my_exit(int status, FILE *fptr){
+	/*exit the program and clean up space*/
+	printf("\ncalling my_exit with status: %d\n",status);
+	//free up space from fopen
+	fclose(fptr);
 	exit(status);
+}
+
+int ls_dir(){
+
+}
+
+/*----------------------------------------- PART 2: INFO[5]------------------------------------------ */
+void info(boot_sector_info BSI){
+
+	size_t n = sizeof(BSI.BS_jmpBoot)/sizeof(BSI.BS_jmpBoot[0]);
+	int i;
+	printf("Jump Boot (should have EB): ");
+	for(i = 0; i < n; i++){
+		printf("%02X", BSI.BS_jmpBoot[i]);
+	}
+	printf("\n");
+
+	printf("OEMName: %s\n", BSI.BS_OEMName);
+	printf("Bytes per Section: %d\n", BSI.BPB_BytesPerSec);
+	printf("Sections per Cluster: %d\n", BSI.BPB_SecPerClus);
+	printf("Size of reserved area: %d\n", BSI.BPB_RsvdSecCnt);
+	printf("Number of FATs (must be 2): %d\n", BSI.BPB_NumFATS);
+	printf("Number of Root directory entries (must be 0): %d\n", BSI.BPB_RootEntCnt);
+	printf("Total number of Sectors: %d\n", BSI.BPB_TotSec16);
+	printf("Media type: %d\n", BSI.BPB_Media);
+	printf("16-bit count sectors occupied by one FAT (should be 0): %d\n", BSI.BPB_FATSz16);
+	printf("Sectors per Track: %d\n", BSI.BPB_SecPerTrk);
+	printf("Number of Heads: %d\n", BSI.BPB_NumHeads);
+	printf("Number of hidden sectors/sectors before partition: %d\n", BSI.BPB_HiddSec);
+	printf("Total Number of Sectors (must be non-zero): %d\n", BSI.BPB_TotSec32);
+	printf("\n");
+	printf("32-bit count sectors occupied by one FAT: %d\n", BSI.BPB_FATSz32);
+	printf("Extension Flags : %d\n", BSI.BPB_ExtFlags);
+	printf("FAT32 Version: %d\n", BSI.BPB_FSVer);
+	printf("Root directory first cluster number (usually 2 but not required): %d\n", BSI.BPB_RootClus);
+	printf("Sector Number of FSINFO structure (usually 1): %d\n", BSI.BPB_FSInfo);
+	printf("Bk Boot Sector (usually 6): %d\n", BSI.BPB_BkBootSec);
+
+	n  = sizeof(BSI.BPB_Reserved)/sizeof(BSI.BPB_Reserved[0]);
+	printf("Reserved for future expansion (all bytes for FAT32 should be set to 0): ");
+	for(i = 0; i < n; i++){
+		printf("%02X", BSI.BPB_Reserved[i]);
+	}
+	printf("\n");
+
+	printf("Drive Number: %d\n", BSI.BS_DrvNum);
+	printf("Reserved1 value: %d\n", BSI.BS_Reserved1);
+	printf("BootSig value: %d\n", BSI.BS_BootSig);
+	printf("Volume ID value: %d\n", BSI.BS_VolID);
+
+	n = sizeof(BSI.BS_VolLab)/sizeof(BSI.BS_VolLab[0]);
+	printf("Volume Lab value (should be NO NAME [convert from Hex to String]): ");
+	for(i = 0; i < n; i++){
+		printf("%02X", BSI.BS_VolLab[i]);
+	}
+	printf("\n");
+
+	n = sizeof(BSI.BS_FilSysType)/sizeof(BSI.BS_FilSysType[0]);
+	printf("File System Type (should be FAT32 [convert from Hex to String]): ");
+	for(i = 0; i < n; i++){
+		printf("%02X", BSI.BS_FilSysType[i]);
+	}
+	printf("\n");
+
+}
+
+void print_dir_info(dir_info DI){
+	printf("\n**PRINTING DIRECTORY INFO**\n");
+
+	size_t n = sizeof(DI.filename)/sizeof(DI.filename[0]);
+	int i;
+	printf("DIR filename is: ");
+	for(i = 0; i < n; i++){
+		printf("%c", DI.filename[i]);
+	}
+	printf("\n");
+
+	printf("DIR attribute is: %d\n", DI.attribute);
+	printf("DIR HI cluster is: %d\n", DI.high_cluster);
+	printf("DIR LO cluster is: %d\n", DI.low_cluster);
+	printf("DIR file size is: %d\n", DI.file_size);
+}
+
+void print_file_info(file_info FI){
+	printf("\n**PRINTING FILE INFO**\n");
+
+	size_t n = sizeof(FI.filename)/sizeof(FI.filename[0]);
+	int i;
+	printf("filename is: ");
+	for(i = 0; i < n; i++){
+		printf("%c", FI.filename[i]);
+	}
+	printf("\n");
+
+	printf("File attribute is: %d\n", FI.attribute);
+	printf("File HI cluster is: %d\n", FI.hi_cluster);
+	printf("File LO cluster is: %d\n", FI.lo_cluster);
+	printf("File size is: %d\n", FI.file_size);
+}
+
+unsigned long fat_begin_lba(boot_sector_info BSI){
+	return LBA_BEGIN + BSI.BPB_RsvdSecCnt;
+}
+
+unsigned long cluster_begin_lba(boot_sector_info BSI){
+	return LBA_BEGIN +(BSI.BPB_RsvdSecCnt * BSI.BPB_BytesPerSec)  + (BSI.BPB_NumFATS * BSI.BPB_FATSz32 * BSI.BPB_BytesPerSec);
+}
+
+unsigned long lba_addr(int cluster_number, boot_sector_info BSI){
+	return(cluster_begin_lba(BSI) + (cluster_number - 2) * BSI.BPB_SecPerClus);
+}
+
+unsigned long find_first_data_sector(boot_sector_info BSI){
+	unsigned long RootDirSectors, FirstDataSector;
+
+	RootDirSectors = ((BSI.BPB_RootEntCnt* 32) + (BSI.BPB_BytesPerSec-1)) / BSI.BPB_BytesPerSec;
+	FirstDataSector = BSI.BPB_RsvdSecCnt + (BSI.BPB_NumFATS * BSI.BPB_FATSz32) + RootDirSectors;
+
+	return FirstDataSector;
+}
+
+unsigned long find_first_sector_of_cluster(boot_sector_info BSI, int N){
+/*N is the cluster number to find the sector of*/
+	unsigned long FirstDataSector = find_first_data_sector(BSI);
+
+	unsigned long FirstSectorofCluster = ((N - 2) * BSI.BPB_SecPerClus) + FirstDataSector;
+
+	return FirstSectorofCluster;
+}
+
+int count_sectors_in_data_region(boot_sector_info BSI){
+	unsigned long DataSec;
+	unsigned long RootDirSectors = ((BSI.BPB_RootEntCnt* 32) + (BSI.BPB_BytesPerSec-1)) / BSI.BPB_BytesPerSec;
+
+	DataSec = BSI.BPB_TotSec32 - (BSI.BPB_RsvdSecCnt + (BSI.BPB_NumFATS * BSI.BPB_FATSz32) + RootDirSectors);
+
+	return DataSec;
+}
+
+uint32_t find_FAT_sector_number(boot_sector_info BSI, int N){
+	/*N is the cluster number*/
+	int FATOffset = N * 4;
+
+	uint32_t ThisFATSecNum = BSI.BPB_RsvdSecCnt + (FATOffset / BSI.BPB_BytesPerSec);
+
+	return ThisFATSecNum;
+}
+
+int find_FAT_entry_offset(boot_sector_info BSI, int N){
+	/*N is the cluster number*/
+
+	int FATOffset = N * 4;
+	
+	int ThisFATEntOffset = FATOffset % BSI.BPB_BytesPerSec;
+
+	return ThisFATEntOffset;
+}
+
+
+
+/**************************************************************************************************************/
+void addToken(instruction* instr_ptr, char* tok){
+	//extend token array to accomodate an additional token
+	if (instr_ptr->numTokens == 0)
+		instr_ptr->tokens = (char**)malloc(sizeof(char*));
+	else
+		instr_ptr->tokens = (char**)realloc(instr_ptr->tokens, (instr_ptr->numTokens+1) * sizeof(char*));
+
+	//allocate char array for new token in new slot
+	instr_ptr->tokens[instr_ptr->numTokens] = (char *)malloc((strlen(tok)+1) * sizeof(char));
+	strcpy(instr_ptr->tokens[instr_ptr->numTokens], tok);
+	instr_ptr->numTokens++;
+
+}
+
+void printTokens(instruction* instr_ptr){
+	int i;
+	printf("Tokens:\n");
+	for (i = 0; i < instr_ptr->numTokens; i++)
+		printf("#%s#\n", (instr_ptr->tokens)[i]);
+	printf("\n");
+}
+
+void clearInstruction(instruction* instr_ptr){
+	int i;
+	for (i = 0; i < instr_ptr->numTokens; i++)
+		free(instr_ptr->tokens[i]);
+	free(instr_ptr->tokens);
+
+	instr_ptr->tokens = NULL;
+	instr_ptr->numTokens = 0;
 }
