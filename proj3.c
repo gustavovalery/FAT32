@@ -56,7 +56,7 @@ typedef struct Boot_Sector_Info{
 	unsigned char BS_FilSysType[8];
 } __attribute__((packed)) boot_sector_info;
 
-typedef struct Dir_Info{
+typedef struct File_Info{
 	unsigned char filename[11];
 	uint8_t attribute;
 	uint8_t skip1[8];
@@ -64,15 +64,7 @@ typedef struct Dir_Info{
 	uint8_t skip2[4];
 	uint16_t low_cluster;
 	uint32_t file_size;
-} __attribute__((packed)) dir_info; 
-
-typedef struct File_Info{
-	unsigned char filename[11];
-	uint8_t attribute;
-	uint16_t hi_cluster;
-	uint16_t lo_cluster;
-	uint32_t file_size;
-} __attribute__((packed)) file_info;
+} __attribute__((packed)) file_info; 
 
 int i;
 uint32_t DWORD;
@@ -90,7 +82,7 @@ void clearInstruction(instruction* instr_ptr);
 unsigned long fat_begin_lba(boot_sector_info BSI);
 unsigned long cluster_begin_lba(boot_sector_info BSI);
 int my_exit(int status, FILE *fptr);
-void print_dir_info(dir_info DI);
+void print_file_info(file_info FI);
 unsigned long lba_addr(int cluster_number, boot_sector_info BSI);
 void print_file_info(file_info FI);
 unsigned long find_first_data_sector(boot_sector_info BSI);
@@ -118,7 +110,6 @@ int main(int argc, char *argv[]){
 
 	FILE *fptr;
 	struct Boot_Sector_Info BSI;
-	struct Dir_Info DI;
 	struct File_Info FI;
 
 	fptr = fopen(argv[1],"rb");
@@ -196,13 +187,17 @@ int main(int argc, char *argv[]){
 			}
 
 			printf("\n");
-		
+
+			fread(&FI, sizeof(struct File_Info), 1, fptr);
+
+			print_file_info(FI);
+
 			/*
-			unsigned int offset = lba_addr(3, BSI);
-			fseek(fptr,offset, SEEK_SET);
-			fread(&DI,sizeof(struct Dir_Info),1,fptr);
-			print_dir_info(DI);
-			*/
+			   unsigned int offset = lba_addr(3, BSI);
+			   fseek(fptr,offset, SEEK_SET);
+			   fread(&FI,sizeof(struct File_Info),1,fptr);
+			   print_file_info(FI);
+			   */
 		}
 		else{
 			clearInstruction(&instr);
@@ -288,38 +283,21 @@ void info(boot_sector_info BSI){
 
 }
 
-void print_dir_info(dir_info DI){
-	printf("\n**PRINTING DIRECTORY INFO**\n");
-
-	size_t n = sizeof(DI.filename)/sizeof(DI.filename[0]);
-	int i;
-	printf("DIR filename is: ");
-	for(i = 0; i < n; i++){
-		printf("%c", DI.filename[i]);
-	}
-	printf("\n");
-
-	printf("DIR attribute is: %d\n", DI.attribute);
-	printf("DIR HI cluster is: %d\n", DI.high_cluster);
-	printf("DIR LO cluster is: %d\n", DI.low_cluster);
-	printf("DIR file size is: %d\n", DI.file_size);
-}
-
 void print_file_info(file_info FI){
 	printf("\n**PRINTING FILE INFO**\n");
 
 	size_t n = sizeof(FI.filename)/sizeof(FI.filename[0]);
 	int i;
-	printf("filename is: ");
+	printf("DIR filename is: ");
 	for(i = 0; i < n; i++){
-		printf("%c", FI.filename[i]);
+		printf("%02X", FI.filename[i]);
 	}
 	printf("\n");
 
-	printf("File attribute is: %d\n", FI.attribute);
-	printf("File HI cluster is: %d\n", FI.hi_cluster);
-	printf("File LO cluster is: %d\n", FI.lo_cluster);
-	printf("File size is: %d\n", FI.file_size);
+	printf("DIR attribute is: 0x%02X\n", FI.attribute);
+	printf("DIR HI cluster is: %d\n", FI.high_cluster);
+	printf("DIR LO cluster is: %d\n", FI.low_cluster);
+	printf("DIR file size is: %d\n", FI.file_size);
 }
 
 unsigned long fat_begin_lba(boot_sector_info BSI){
@@ -344,7 +322,7 @@ unsigned long find_first_data_sector(boot_sector_info BSI){
 }
 
 unsigned long find_first_sector_of_cluster(boot_sector_info BSI, int N){
-/*N is the cluster number to find the sector of*/
+	/*N is the cluster number to find the sector of*/
 	unsigned long FirstDataSector = find_first_data_sector(BSI);
 
 	unsigned long FirstSectorofCluster = ((N - 2) * BSI.BPB_SecPerClus) + FirstDataSector;
@@ -374,7 +352,7 @@ int find_FAT_entry_offset(boot_sector_info BSI, int N){
 	/*N is the cluster number*/
 
 	int FATOffset = N * 4;
-	
+
 	int ThisFATEntOffset = FATOffset % BSI.BPB_BytesPerSec;
 
 	return ThisFATEntOffset;
