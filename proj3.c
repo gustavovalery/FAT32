@@ -57,6 +57,7 @@ typedef struct Boot_Sector_Info{
 } __attribute__((packed)) boot_sector_info;
 
 typedef struct File_Info{
+
 	unsigned char filename[11];
 	uint8_t attribute;
 	uint8_t skip1[8];
@@ -65,6 +66,8 @@ typedef struct File_Info{
 	uint16_t low_cluster;
 	uint32_t file_size;
 } __attribute__((packed)) file_info; 
+
+struct File_Info entries[16];
 
 int i;
 uint32_t DWORD;
@@ -177,20 +180,59 @@ int main(int argc, char *argv[]){
 		else if((strcmp(instr.tokens[0], "exit")) == 0){
 			my_exit(0, fptr);
 		}
-		else if((strcmp(instr.tokens[0],"test")) == 0){
-			nextClusNum = find_FAT_sector_number(BSI, 2) * BSI.BPB_BytesPerSec + find_FAT_entry_offset(BSI, 2); 
+		else if((strcmp(instr.tokens[0],"ls")) == 0){
+			int N = 2;
+			unsigned long FirstSectorofCluster = find_first_data_sector(BSI) + ((N - 2) * BSI.BPB_SecPerClus);
+
+
+			int flag = 0;
+			int clusterNum = 3;
+
+			int offset;
+			int j = 0;
+
+			/*
+			while(flag == 0){
+				nextClusNum = find_FAT_sector_number(BSI,clusterNum) * BSI.BPB_BytesPerSec + find_FAT_entry_offset(BSI, clusterNum); 
+				fseek(fptr, nextClusNum, SEEK_SET);
+				fread(&SecBuff, 1, 2, fptr);		
+
+				for(i = 0; i < 4; i++){
+					printf("%02X", SecBuff[i]);
+				}
+
+				printf("\n");			
+
+				clusterNum = SecBuff[0];
+
+				if(SecBuff[0] == 0xF8)
+					flag = 1;
+			}
+
+			
+			nextClusNum = find_FAT_sector_number(BSI,2) * BSI.BPB_BytesPerSec + find_FAT_entry_offset(BSI, 2); 
 			fseek(fptr, nextClusNum, SEEK_SET);
-			fread(&SecBuff, 1, 4, fptr);
+			fread(&SecBuff, 1, 2, fptr);
 
 			for(i = 0; i < 4; i++){
 				printf("%02X", SecBuff[i]);
 			}
 
 			printf("\n");
+			*/
 
-			fread(&FI, sizeof(struct File_Info), 1, fptr);
+			for(offset = 32; offset <= 512; offset += 64){
 
-			print_file_info(FI);
+				fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec + offset, SEEK_SET);
+				fread(&entries[j], sizeof(struct File_Info), 1, fptr);
+
+				print_file_info(entries[j]);
+
+				j++;		
+			}
+
+
+
 
 			/*
 			   unsigned int offset = lba_addr(3, BSI);
@@ -234,48 +276,48 @@ void info(boot_sector_info BSI){
 	}
 	printf("\n");
 
-	printf("OEMName: %s\n", BSI.BS_OEMName);
-	printf("Bytes per Section: %d\n", BSI.BPB_BytesPerSec);
-	printf("Sections per Cluster: %d\n", BSI.BPB_SecPerClus);
-	printf("Size of reserved area: %d\n", BSI.BPB_RsvdSecCnt);
-	printf("Number of FATs (must be 2): %d\n", BSI.BPB_NumFATS);
-	printf("Number of Root directory entries (must be 0): %d\n", BSI.BPB_RootEntCnt);
-	printf("Total number of Sectors: %d\n", BSI.BPB_TotSec16);
-	printf("Media type: %d\n", BSI.BPB_Media);
-	printf("16-bit count sectors occupied by one FAT (should be 0): %d\n", BSI.BPB_FATSz16);
-	printf("Sectors per Track: %d\n", BSI.BPB_SecPerTrk);
-	printf("Number of Heads: %d\n", BSI.BPB_NumHeads);
-	printf("Number of hidden sectors/sectors before partition: %d\n", BSI.BPB_HiddSec);
-	printf("Total Number of Sectors (must be non-zero): %d\n", BSI.BPB_TotSec32);
+	printf("BS_OEMName: %s\n", BSI.BS_OEMName);
+	printf("BPB_BytesPerSec: %d\n", BSI.BPB_BytesPerSec);
+	printf("BPB_SecPerClus: %d\n", BSI.BPB_SecPerClus);
+	printf("BPB_RsvdSecCnt: %d\n", BSI.BPB_RsvdSecCnt);
+	printf("BPB_NumFATS (must be 2): %d\n", BSI.BPB_NumFATS);
+	printf("BPB_RootEntCnt (must be 0): %d\n", BSI.BPB_RootEntCnt);
+	printf("BPB_TotSec16: %d\n", BSI.BPB_TotSec16);
+	printf("BPB_Media: %d\n", BSI.BPB_Media);
+	printf("BPB_FATSz16 (should be 0): %d\n", BSI.BPB_FATSz16);
+	printf("BPB_SecPerTrk: %d\n", BSI.BPB_SecPerTrk);
+	printf("BPB_NumHeads: %d\n", BSI.BPB_NumHeads);
+	printf("BPB_HiddSec: %d\n", BSI.BPB_HiddSec);
+	printf("BPB_TotSec32 (must be non-zero): %d\n", BSI.BPB_TotSec32);
 	printf("\n");
-	printf("32-bit count sectors occupied by one FAT: %d\n", BSI.BPB_FATSz32);
-	printf("Extension Flags : %d\n", BSI.BPB_ExtFlags);
-	printf("FAT32 Version: %d\n", BSI.BPB_FSVer);
-	printf("Root directory first cluster number (usually 2 but not required): %d\n", BSI.BPB_RootClus);
-	printf("Sector Number of FSINFO structure (usually 1): %d\n", BSI.BPB_FSInfo);
-	printf("Bk Boot Sector (usually 6): %d\n", BSI.BPB_BkBootSec);
+	printf("BPB_FATSz32: %d\n", BSI.BPB_FATSz32);
+	printf("BPB_ExtFlags: %d\n", BSI.BPB_ExtFlags);
+	printf("BPB_FSVer: %d\n", BSI.BPB_FSVer);
+	printf("BPB_RootClus (usually 2 but not required): %d\n", BSI.BPB_RootClus);
+	printf("BPB_FSInfo (usually 1): %d\n", BSI.BPB_FSInfo);
+	printf("BPB_BkBootSec (usually 6): %d\n", BSI.BPB_BkBootSec);
 
 	n  = sizeof(BSI.BPB_Reserved)/sizeof(BSI.BPB_Reserved[0]);
-	printf("Reserved for future expansion (all bytes for FAT32 should be set to 0): ");
+	printf("BPB_Reserved (all bytes for FAT32 should be set to 0): ");
 	for(i = 0; i < n; i++){
 		printf("%02X", BSI.BPB_Reserved[i]);
 	}
 	printf("\n");
 
-	printf("Drive Number: %d\n", BSI.BS_DrvNum);
-	printf("Reserved1 value: %d\n", BSI.BS_Reserved1);
-	printf("BootSig value: %d\n", BSI.BS_BootSig);
-	printf("Volume ID value: %d\n", BSI.BS_VolID);
+	printf("BS_DrvNum: %d\n", BSI.BS_DrvNum);
+	printf("BS_Reserved1: %d\n", BSI.BS_Reserved1);
+	printf("BS_BootSig: %d\n", BSI.BS_BootSig);
+	printf("BS_VolID: %d\n", BSI.BS_VolID);
 
 	n = sizeof(BSI.BS_VolLab)/sizeof(BSI.BS_VolLab[0]);
-	printf("Volume Lab value (should be NO NAME [convert from Hex to String]): ");
+	printf("BS_VolLab (should be NO NAME [convert from Hex to String]): ");
 	for(i = 0; i < n; i++){
 		printf("%02X", BSI.BS_VolLab[i]);
 	}
 	printf("\n");
 
 	n = sizeof(BSI.BS_FilSysType)/sizeof(BSI.BS_FilSysType[0]);
-	printf("File System Type (should be FAT32 [convert from Hex to String]): ");
+	printf("BS_FilSysType (should be FAT32 [convert from Hex to String]): ");
 	for(i = 0; i < n; i++){
 		printf("%02X", BSI.BS_FilSysType[i]);
 	}
@@ -288,9 +330,14 @@ void print_file_info(file_info FI){
 
 	size_t n = sizeof(FI.filename)/sizeof(FI.filename[0]);
 	int i;
+
+	if(FI.filename[0] == 46){
+		printf("THIS IS A DIRECTORY\n");
+	}
+
 	printf("DIR filename is: ");
 	for(i = 0; i < n; i++){
-		printf("%02X", FI.filename[i]);
+		printf("%c", FI.filename[i]);
 	}
 	printf("\n");
 
@@ -315,8 +362,12 @@ unsigned long lba_addr(int cluster_number, boot_sector_info BSI){
 unsigned long find_first_data_sector(boot_sector_info BSI){
 	unsigned long RootDirSectors, FirstDataSector;
 
+	/*RootDirSectors = 0 most of the time*/
 	RootDirSectors = ((BSI.BPB_RootEntCnt* 32) + (BSI.BPB_BytesPerSec-1)) / BSI.BPB_BytesPerSec;
-	FirstDataSector = BSI.BPB_RsvdSecCnt + (BSI.BPB_NumFATS * BSI.BPB_FATSz32) + RootDirSectors;
+	
+	FirstDataSector = (BSI.BPB_RsvdSecCnt + (BSI.BPB_NumFATS * BSI.BPB_FATSz32) + RootDirSectors);
+
+	printf("FirstDataSector = 0x%02X\n", FirstDataSector);
 
 	return FirstDataSector;
 }
