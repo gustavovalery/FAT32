@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include<ctype.h>
 #define LBA_BEGIN 0
 
 
@@ -58,6 +59,7 @@ typedef struct Boot_Sector_Info{
 
 typedef struct File_Info{
 
+	unsigned char skip0[32];
 	unsigned char filename[11];
 	uint8_t attribute;
 	uint8_t skip1[8];
@@ -67,36 +69,45 @@ typedef struct File_Info{
 	uint32_t file_size;
 } __attribute__((packed)) file_info; 
 
-struct File_Info entries[16];
+struct File_Info FI;
+struct Boot_Sector_Info BSI;
+FILE* fptr;
 
 int i;
 uint32_t DWORD;
 uint8_t SecBuff[4];
 uint32_t nextClusNum;
+/*this would be a cluster number*/
+uint32_t currDir;
 
 
 /* Prototypes! */
-int my_exit(int status, FILE *fptr);
-int ls_dir();
-void info(boot_sector_info BSI);
+int my_exit(int status);
+int ls_dir(unsigned char* dir_name);
+void info();
 void addToken(instruction* instr_ptr, char* tok);
 void printTokens(instruction* instr_ptr);
 void clearInstruction(instruction* instr_ptr);
-unsigned long fat_begin_lba(boot_sector_info BSI);
-unsigned long cluster_begin_lba(boot_sector_info BSI);
-int my_exit(int status, FILE *fptr);
-void print_file_info(file_info FI);
-unsigned long lba_addr(int cluster_number, boot_sector_info BSI);
-void print_file_info(file_info FI);
-unsigned long find_first_data_sector(boot_sector_info BSI);
-unsigned long find_first_sector_of_cluster(boot_sector_info BSI, int N);
-int count_sectors_in_data_region(boot_sector_info BSI);
-uint32_t find_FAT_sector_number(boot_sector_info BSI, int N);
-int find_FAT_entry_offset(boot_sector_info BSI, int N);
+unsigned long fat_begin_lba();
+unsigned long cluster_begin_lba();
+int my_exit(int status);
+void print_file_info();
+unsigned long lba_addr(int cluster_number);
+void print_file_info();
+unsigned long find_first_data_sector();
+unsigned long find_first_sector_of_cluster(int N);
+int count_sectors_in_data_region();
+uint32_t find_FAT_sector_number(int N);
+int find_FAT_entry_offset(int N);
+char* deblank(char* input);
+unsigned long find_next_cluster();
+void print_dir_entries();
+int check_if_dir(unsigned char* dir_name);
 
 /*---------------------------------------------------------*/
 
 int main(int argc, char *argv[]){
+	/*these char pointers are for storing user input*/
 	char* token = NULL;
 	char* temp = NULL;
 
@@ -111,18 +122,17 @@ int main(int argc, char *argv[]){
 
 	printf("%s was the argument\n\n",argv[1]);
 
-	FILE *fptr;
-	struct Boot_Sector_Info BSI;
-	struct File_Info FI;
-
+	/*open the second argument of the executable in read-only binary*/
 	fptr = fopen(argv[1],"rb");
 
 	if(!fptr){
 		printf("ERROR: fptr is invalid!\n\n");
-		my_exit(1, fptr);
+		my_exit(1);
 	}
 
-	/*using fread() on ((packed)) struct does most of the work for you*/
+	/*using fread() on ((packed)) struct does most of the work for you
+	 * solves little endian issues
+	 * reads boot sector part of fat32.img into struct*/
 	fread(&BSI, sizeof(struct Boot_Sector_Info), 1, fptr);
 
 	while(1){
@@ -174,72 +184,28 @@ int main(int argc, char *argv[]){
 
 		printTokens(&instr);
 
+		/*--------------------------END OF PARSING CODE------------------------------*/
+
+		int flag;
+		/*this should set it = 2 at the beginning*/
+		currDir = BSI.BPB_RootClus;
+
 		if((strcmp(instr.tokens[0], "info")) == 0){
-			info(BSI);
+			info();
 		}
 		else if((strcmp(instr.tokens[0], "exit")) == 0){
-			my_exit(0, fptr);
+			my_exit(0);
 		}
 		else if((strcmp(instr.tokens[0],"ls")) == 0){
-			int N = 2;
-			unsigned long FirstSectorofCluster = find_first_data_sector(BSI) + ((N - 2) * BSI.BPB_SecPerClus);
-
-
-			int flag = 0;
-			int clusterNum = 3;
-
-			int offset;
-			int j = 0;
-
-			/*
-			while(flag == 0){
-				nextClusNum = find_FAT_sector_number(BSI,clusterNum) * BSI.BPB_BytesPerSec + find_FAT_entry_offset(BSI, clusterNum); 
-				fseek(fptr, nextClusNum, SEEK_SET);
-				fread(&SecBuff, 1, 2, fptr);		
-
-				for(i = 0; i < 4; i++){
-					printf("%02X", SecBuff[i]);
-				}
-
-				printf("\n");			
-
-				clusterNum = SecBuff[0];
-
-				if(SecBuff[0] == 0xF8)
-					flag = 1;
+			if(instr.numTokens == 1){
+				ls_dir(".");
+			}			
+			else if(instr.numTokens == 2){
+				flag = ls_dir(instr.tokens[1]);
 			}
-
-			
-			nextClusNum = find_FAT_sector_number(BSI,2) * BSI.BPB_BytesPerSec + find_FAT_entry_offset(BSI, 2); 
-			fseek(fptr, nextClusNum, SEEK_SET);
-			fread(&SecBuff, 1, 2, fptr);
-
-			for(i = 0; i < 4; i++){
-				printf("%02X", SecBuff[i]);
+			else{
+				printf("ERROR, too many arguments.");
 			}
-
-			printf("\n");
-			*/
-
-			for(offset = 32; offset <= 512; offset += 64){
-
-				fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec + offset, SEEK_SET);
-				fread(&entries[j], sizeof(struct File_Info), 1, fptr);
-
-				print_file_info(entries[j]);
-
-				j++;		
-			}
-
-
-
-
-			/*
-			   unsigned int offset = lba_addr(3, BSI);
-			   fseek(fptr,offset, SEEK_SET);
-			   fread(&FI,sizeof(struct File_Info),1,fptr);
-			   print_file_info(FI);
-			   */
 		}
 		else{
 			clearInstruction(&instr);
@@ -247,13 +213,14 @@ int main(int argc, char *argv[]){
 
 		clearInstruction(&instr);
 	}
-	my_exit(0, fptr);
+	my_exit(0);
 	return 0;
 }
 
 
 /*---------------------------------PART 1: EXIT[2] ---------------------------------------------------*/
-int my_exit(int status, FILE *fptr){
+
+int my_exit(int status){
 	/*exit the program and clean up space*/
 	printf("\ncalling my_exit with status: %d\n",status);
 	//free up space from fopen
@@ -261,15 +228,14 @@ int my_exit(int status, FILE *fptr){
 	exit(status);
 }
 
-int ls_dir(){
-
-}
-
 /*----------------------------------------- PART 2: INFO[5]------------------------------------------ */
-void info(boot_sector_info BSI){
+void info(){
+	/*this prints out the contents of the Boot Sector*/
 
+	/*set n like this so it's the size of jmpBoot*/
 	size_t n = sizeof(BSI.BS_jmpBoot)/sizeof(BSI.BS_jmpBoot[0]);
 	int i;
+	/*each index is a 2 digit hex value*/
 	printf("Jump Boot (should have EB): ");
 	for(i = 0; i < n; i++){
 		printf("%02X", BSI.BS_jmpBoot[i]);
@@ -322,19 +288,144 @@ void info(boot_sector_info BSI){
 		printf("%02X", BSI.BS_FilSysType[i]);
 	}
 	printf("\n");
-
 }
 
-void print_file_info(file_info FI){
+/*----------------------------------------- END OF PART 2: INFO[5] ------------------------------------------ */
+
+
+/*----------------------------------------- PART 3: LS DIRNAME[5] ------------------------------------------ */
+
+int ls_dir(unsigned char* dir_name){
+	int oldCurrDir = currDir;
+	int flag;
+
+	/*if the argument is the current directory, simply print entries*/
+	if(strcmp(dir_name, ".") == 0){
+		print_dir_entries();
+	}
+	else{
+		flag = check_if_dir(dir_name);		
+
+		if(flag == -1){
+			printf("ERROR: entry not a directory.");
+		}
+		else if (flag == 0){
+			printf("ERROR: entry not found.");
+		}
+		else if(flag == 1){
+			print_dir_entries();
+			currDir = oldCurrDir;
+		}
+	}
+	return flag;
+}
+
+/*----------------------------------------- END OF PART 3: LS DIRNAME[5] ------------------------------------------ */
+
+
+void print_dir_entries(){
+
+	/*the first sector of a cluster number is by finding the first Data Sector and then multiplying
+	 * the cluster number (minus 2) with the sectors per cluster*/
+	unsigned long FirstSectorofCluster = find_first_data_sector() + ((currDir - 2) * BSI.BPB_SecPerClus);
+
+	/*offset of bytes*/
+	int entryNum;
+
+	printf("ENTRY POSITION = %02lX", FirstSectorofCluster * BSI.BPB_BytesPerSec);
+
+	/*there's 512 bytes per cluster, so multiply the sector/cluster number by those bytes
+	 * to properly place the file ptr*/
+	fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec, SEEK_SET);
+
+	/*32 bytes after the first sector of the cluster is where the information lies
+	 * every 64 bytes after that is the next DIR/file
+	 * do this up to 512 bytes, as that is the bytes per entire cluster */
+	for(entryNum = 0; entryNum < 8; entryNum++){
+
+		/*read the information into an array of entries struct*/
+		fread(&FI, sizeof(struct File_Info), 1, fptr);
+
+		/*if it starts reading in 0s, means no more valid entries, so can break out of loop*/
+		if(FI.attribute == 0x00)
+			break;
+
+		print_file_info();
+	}
+}
+
+int check_if_dir(unsigned char* dir_name){
+	/*is practically the same as print_dir_entries
+	 * but with a check for filename comparisons*/
+
+	/*returns 1 for success and sets currDir,
+	 * -1 if entry found but not a directory,
+	 *  and 0 on failure*/
+
+	char* tempFileName;
+
+	/*the first sector of a cluster number is by finding the first Data Sector and then multiplying
+	 * the cluster number (minus 2) with the sectors per cluster*/
+	unsigned long FirstSectorofCluster = find_first_data_sector() + ((currDir - 2) * BSI.BPB_SecPerClus);
+
+	/*offset of bytes*/
+	int entryNum;
+
+	fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec, SEEK_SET);
+
+	/*32 bytes after the first sector of the cluster is where the information lies
+	 * every 64 bytes after that is the next DIR/file
+	 * do this up to 512 bytes, as that is the bytes per entire cluster */
+	for(entryNum = 0; entryNum < 8; entryNum++){
+
+		/*read the information into an array of entries struct*/
+		fread(&FI, sizeof(struct File_Info), 1, fptr);
+
+		/*if it starts reading in 0s, means no more valid entries, so can break out of loop*/
+		if(FI.attribute == 0x00)
+			break;
+
+		//take out whitespace in filename and set to temp
+		tempFileName = deblank(FI.filename);
+
+		/*if filename found and is a directory*/
+		if((strcmp(tempFileName, dir_name) == 0) && FI.attribute == 0x10){
+			currDir = FI.low_cluster;
+			return 1; 
+		}			
+		/*if filename found but wasn't a directory*/
+		else if((strcmp(tempFileName, dir_name) == 0) && FI.attribute != 0x10){
+			return -1;
+		}
+	}
+	return 0;
+}
+
+char* deblank(char* input)                                         
+{
+	int i,j;
+	char *output=input;
+	for (i = 0, j = 0; i<strlen(input); i++,j++)          
+	{
+		if (isalpha(input[i]) || isdigit(input[i]))                           
+			output[j]=input[i];                     
+		else
+			j--;                                     
+	}
+	output[j]=0;
+	return output;
+}
+
+void print_file_info(){
+	/*this prints out the contents of a DIR/File entry*/
+
 	printf("\n**PRINTING FILE INFO**\n");
 
+	/*set n like this so it's the length of the filename*/
 	size_t n = sizeof(FI.filename)/sizeof(FI.filename[0]);
 	int i;
 
-	if(FI.filename[0] == 46){
-		printf("THIS IS A DIRECTORY\n");
-	}
-
+	/*each array index is a char*/
 	printf("DIR filename is: ");
 	for(i = 0; i < n; i++){
 		printf("%c", FI.filename[i]);
@@ -347,41 +438,45 @@ void print_file_info(file_info FI){
 	printf("DIR file size is: %d\n", FI.file_size);
 }
 
-unsigned long fat_begin_lba(boot_sector_info BSI){
+
+unsigned long find_next_cluster(){
+
+}
+
+
+unsigned long fat_begin_lba(){
 	return LBA_BEGIN + BSI.BPB_RsvdSecCnt;
 }
 
-unsigned long cluster_begin_lba(boot_sector_info BSI){
+unsigned long cluster_begin_lba(){
 	return LBA_BEGIN +(BSI.BPB_RsvdSecCnt * BSI.BPB_BytesPerSec)  + (BSI.BPB_NumFATS * BSI.BPB_FATSz32 * BSI.BPB_BytesPerSec);
 }
 
-unsigned long lba_addr(int cluster_number, boot_sector_info BSI){
-	return(cluster_begin_lba(BSI) + (cluster_number - 2) * BSI.BPB_SecPerClus);
+unsigned long lba_addr(int cluster_number){
+	return(cluster_begin_lba() + (cluster_number - 2) * BSI.BPB_SecPerClus);
 }
 
-unsigned long find_first_data_sector(boot_sector_info BSI){
-	unsigned long RootDirSectors, FirstDataSector;
+unsigned long find_first_data_sector(){
+	uint32_t RootDirSectors, FirstDataSector;
 
 	/*RootDirSectors = 0 most of the time*/
 	RootDirSectors = ((BSI.BPB_RootEntCnt* 32) + (BSI.BPB_BytesPerSec-1)) / BSI.BPB_BytesPerSec;
-	
-	FirstDataSector = (BSI.BPB_RsvdSecCnt + (BSI.BPB_NumFATS * BSI.BPB_FATSz32) + RootDirSectors);
 
-	printf("FirstDataSector = 0x%02X\n", FirstDataSector);
+	FirstDataSector = (BSI.BPB_RsvdSecCnt + (BSI.BPB_NumFATS * BSI.BPB_FATSz32) + RootDirSectors);
 
 	return FirstDataSector;
 }
 
-unsigned long find_first_sector_of_cluster(boot_sector_info BSI, int N){
+unsigned long find_first_sector_of_cluster(int N){
 	/*N is the cluster number to find the sector of*/
-	unsigned long FirstDataSector = find_first_data_sector(BSI);
+	unsigned long FirstDataSector = find_first_data_sector();
 
 	unsigned long FirstSectorofCluster = ((N - 2) * BSI.BPB_SecPerClus) + FirstDataSector;
 
 	return FirstSectorofCluster;
 }
 
-int count_sectors_in_data_region(boot_sector_info BSI){
+int count_sectors_in_data_region(){
 	unsigned long DataSec;
 	unsigned long RootDirSectors = ((BSI.BPB_RootEntCnt* 32) + (BSI.BPB_BytesPerSec-1)) / BSI.BPB_BytesPerSec;
 
@@ -390,7 +485,7 @@ int count_sectors_in_data_region(boot_sector_info BSI){
 	return DataSec;
 }
 
-uint32_t find_FAT_sector_number(boot_sector_info BSI, int N){
+uint32_t find_FAT_sector_number(int N){
 	/*N is the cluster number*/
 	int FATOffset = N * 4;
 
@@ -399,7 +494,7 @@ uint32_t find_FAT_sector_number(boot_sector_info BSI, int N){
 	return ThisFATSecNum;
 }
 
-int find_FAT_entry_offset(boot_sector_info BSI, int N){
+int find_FAT_entry_offset(int N){
 	/*N is the cluster number*/
 
 	int FATOffset = N * 4;
@@ -408,8 +503,6 @@ int find_FAT_entry_offset(boot_sector_info BSI, int N){
 
 	return ThisFATEntOffset;
 }
-
-
 
 /**************************************************************************************************************/
 void addToken(instruction* instr_ptr, char* tok){
