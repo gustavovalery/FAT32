@@ -69,6 +69,7 @@ typedef struct File_Info{
 	uint32_t file_size;
 } __attribute__((packed)) file_info; 
 
+
 struct File_Info FI;
 struct Boot_Sector_Info BSI;
 FILE* fptr;
@@ -103,6 +104,7 @@ char* deblank(char* input);
 unsigned long find_next_cluster();
 void print_dir_entries();
 int check_if_dir(unsigned char* dir_name);
+int cd_dir(unsigned char* dir_name);
 
 /*---------------------------------------------------------*/
 
@@ -134,6 +136,9 @@ int main(int argc, char *argv[]){
 	 * solves little endian issues
 	 * reads boot sector part of fat32.img into struct*/
 	fread(&BSI, sizeof(struct Boot_Sector_Info), 1, fptr);
+	/*this should set it = 2 at the beginning*/
+	currDir = BSI.BPB_RootClus;
+
 
 	while(1){
 		printf("\nPlease enter an instruction: ");
@@ -182,14 +187,10 @@ int main(int argc, char *argv[]){
 
 		}while('\n' != getchar());    //until end of line is reached
 
-		printTokens(&instr);
-
 		/*--------------------------END OF PARSING CODE------------------------------*/
 
 		int flag;
-		/*this should set it = 2 at the beginning*/
-		currDir = BSI.BPB_RootClus;
-
+		
 		if((strcmp(instr.tokens[0], "info")) == 0){
 			info();
 		}
@@ -205,6 +206,17 @@ int main(int argc, char *argv[]){
 			}
 			else{
 				printf("ERROR, too many arguments.");
+			}
+		}
+		else if(strcmp(instr.tokens[0], "cd") == 0){
+			if(instr.numTokens == 1){
+				cd_dir(".");
+			}
+			else if(instr.numTokens == 2){
+				flag = cd_dir(instr.tokens[1]);
+			}
+			else{
+				printf("ERROR, too many arguments");
 			}
 		}
 		else{
@@ -313,6 +325,10 @@ int ls_dir(unsigned char* dir_name){
 			printf("ERROR: entry not found.");
 		}
 		else if(flag == 1){
+			printf("DEBUG currDir is %d\n", currDir);
+			if(currDir != 2){
+				printf(".\n");
+			}			
 			print_dir_entries();
 			currDir = oldCurrDir;
 		}
@@ -323,6 +339,31 @@ int ls_dir(unsigned char* dir_name){
 /*----------------------------------------- END OF PART 3: LS DIRNAME[5] ------------------------------------------ */
 
 
+/*----------------------------------------- PART 4: CD DIRNAME[5] ------------------------------------------ */
+
+int cd_dir(unsigned char* dir_name){
+	int flag;
+
+	/*if the argument is the current directory, do nothing*/
+	if(strcmp(dir_name, ".") == 0){
+
+	}
+	else{
+		flag = check_if_dir(dir_name);		
+
+		if(flag == -1){
+			printf("ERROR: entry not a directory.");
+		}
+		else if (flag == 0){
+			printf("ERROR: entry not found.");
+		}
+	}
+	return flag;
+
+}
+
+/*----------------------------------------- END OF PART 4: CD DIRNAME[5] ------------------------------------------ */
+
 void print_dir_entries(){
 
 	/*the first sector of a cluster number is by finding the first Data Sector and then multiplying
@@ -331,8 +372,6 @@ void print_dir_entries(){
 
 	/*offset of bytes*/
 	int entryNum;
-
-	printf("ENTRY POSITION = %02lX", FirstSectorofCluster * BSI.BPB_BytesPerSec);
 
 	/*there's 512 bytes per cluster, so multiply the sector/cluster number by those bytes
 	 * to properly place the file ptr*/
@@ -407,7 +446,7 @@ char* deblank(char* input)
 	char *output=input;
 	for (i = 0, j = 0; i<strlen(input); i++,j++)          
 	{
-		if (isalpha(input[i]) || isdigit(input[i]))                           
+		if (isalpha(input[i]) || isdigit(input[i]) || input[i] == '.')                           
 			output[j]=input[i];                     
 		else
 			j--;                                     
@@ -419,23 +458,23 @@ char* deblank(char* input)
 void print_file_info(){
 	/*this prints out the contents of a DIR/File entry*/
 
-	printf("\n**PRINTING FILE INFO**\n");
-
 	/*set n like this so it's the length of the filename*/
 	size_t n = sizeof(FI.filename)/sizeof(FI.filename[0]);
 	int i;
 
 	/*each array index is a char*/
-	printf("DIR filename is: ");
+	/*printf("DIR filename is: ");*/
 	for(i = 0; i < n; i++){
 		printf("%c", FI.filename[i]);
 	}
 	printf("\n");
 
+	/*
 	printf("DIR attribute is: 0x%02X\n", FI.attribute);
 	printf("DIR HI cluster is: %d\n", FI.high_cluster);
 	printf("DIR LO cluster is: %d\n", FI.low_cluster);
 	printf("DIR file size is: %d\n", FI.file_size);
+	*/
 }
 
 
