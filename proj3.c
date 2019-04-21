@@ -34,7 +34,7 @@ typedef struct Boot_Sector_Info{
 	uint16_t BPB_FATSz16;
 	uint16_t BPB_SecPerTrk;
 	uint16_t BPB_NumHeads;
-	uint32_t BPB_HiddSec;
+	int32_t BPB_HiddSec;
 	uint32_t BPB_TotSec32;
 
 	/*START OF SECOND TABLE FOR FAT32*/
@@ -75,15 +75,15 @@ struct File_Info FI;
 struct Boot_Sector_Info BSI;
 FILE* fptr;
 FILE* fptr1;
-
-unsigned int i;
-uint8_t secBuff[4];
 /*this would be a cluster number*/
 uint32_t currDir;
+uint8_t secBuff[4];
+unsigned int i;
 
 /* Prototypes! */
 int my_exit(int status);
 int check_if_dir(unsigned char* dir_name);
+int check_if_file(unsigned char* file_name);
 int find_FAT_entry_offset();
 void info();
 void addToken(instruction* instr_ptr, char* tok);
@@ -93,6 +93,7 @@ void print_file_info();
 void print_dir_entries();
 void ls_dir(unsigned char* dir_name);
 void cd_dir(unsigned char* dir_name);
+void size_dir(unsigned char* file_name);
 char* deblank(char* input);
 uint32_t find_FAT_sector_number();
 unsigned long find_first_data_sector();
@@ -192,7 +193,7 @@ int main(int argc, char *argv[]){
 		/*--------------------------END OF PARSING CODE------------------------------*/
 
 		int flag1;
-		
+
 		if((strcmp(instr.tokens[0], "info")) == 0){
 			info();
 		}
@@ -219,6 +220,17 @@ int main(int argc, char *argv[]){
 			}
 			else{
 				printf("ERROR, too many arguments.\n");
+			}
+		}
+		else if(strcmp(instr.tokens[0], "size") == 0){
+			if(instr.numTokens == 1){
+				printf("ERROR, please provide an argument.\n");
+			}	
+			else if(instr.numTokens == 2){
+				size_dir(instr.tokens[1]);	
+			}
+			else{
+				printf("ERROR too many arguments.\n");
 			}
 		}
 		else{
@@ -329,7 +341,7 @@ void ls_dir(unsigned char* dir_name){
 
 			/*find next cluster for current directory*/
 			find_next_cluster(currDir);	
-			
+
 			/*if there is no other cluster, break out of loop*/
 			if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
 				break;
@@ -359,7 +371,7 @@ void ls_dir(unsigned char* dir_name){
 
 			/*change cluster number to new one*/
 			currDir = secBuff[1] << 8 | secBuff[0];	
-		
+
 			/*now check if name exists in this new cluster*/
 			flag = check_if_dir(dir_name);
 		}
@@ -449,6 +461,49 @@ void cd_dir(unsigned char* dir_name){
 
 /*----------------------------------------- END OF PART 4: CD DIRNAME[5] ------------------------------------------ */
 
+
+/*----------------------------------------- PART 5: SIZE FILENAME[5] ------------------------------------------ */
+
+void size_dir(unsigned char* file_name){
+	int oldCurrDir = currDir;
+	int flag;
+
+	/*check if filename is in current cluster*/
+	flag = check_if_file(file_name);	
+
+	/*while the filename hasn't been found yet*/
+	while(flag == 0){
+		find_next_cluster(currDir);	
+
+		/*break cluster following if there are no other clusters to follow*/
+		if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+			break;
+		}
+
+		/*change currDir to new cluster*/
+		currDir = secBuff[1] << 8 | secBuff[0];
+
+		/*check if file is available in new cluster*/
+		flag = check_if_file(file_name);	
+	
+	}
+	/*if flag is -1, means entry was found but wasn't a file*/
+	if(flag == -1){
+		printf("ERROR: entry not a file.\n");
+	}
+	/*is flaf is still 0, means entry was never found*/
+	else if(flag == 0){
+		printf("ERROR: entry not found.\n");
+	}
+	/*if flag = 1, means entry was found and FI is set to that entry*/
+	else if(flag == 1){
+		printf("file size is %d\n", FI.file_size);
+	}
+	currDir = oldCurrDir;
+}
+
+/*----------------------------------------- END OF PART 5: SIZE FILENAME[5] ------------------------------------------ */
+
 void print_dir_entries(){
 
 	/*the first data sector of a cluster number is found by finding the first Data Sector and then multiplying
@@ -529,6 +584,58 @@ int check_if_dir(unsigned char* dir_name){
 	return 0;
 }
 
+int check_if_file(unsigned char* file_name){
+	/*is practically the same as print_dir_entries
+	 * but with a check for filename comparisons*/
+
+	/*returns 1 for success and sets currDir,
+	 * -1 if entry found but not a directory,
+	 *  and 0 on failure*/
+
+	char* tempFileName;
+
+	/*jump to first data sector of the currDir/cluster number*/
+	unsigned long FirstSectorofCluster = find_first_data_sector() + ((currDir - 2) * BSI.BPB_SecPerClus);
+
+	/*offset of bytes*/
+	int entryNum;
+
+	fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec, SEEK_SET);
+
+	/*512 bytes for data sector of a cluster and each entry is 64 bytes*/
+	for(entryNum = 0; entryNum < 8; entryNum++){
+
+		/*read the information into an array of entries struct*/
+		fread(&FI, sizeof(struct File_Info), 1, fptr);
+
+		/*if it starts reading in 0s, means no more valid entries, so can break out of loop*/
+		if(FI.attribute == 0x00)
+			break;
+
+		//take out whitespace in filename and set to temp
+		tempFileName = deblank(FI.filename);
+
+		/*if filename found and is a file*/
+		if((strcmp(tempFileName, file_name) == 0) && FI.attribute == 0x20){
+			/*clusters that point back to root directory are 0 for some reason, 
+			 * so make them 2 for proper navigation.*/
+			if((FI.high_cluster << 16 | FI.low_cluster) == 0){
+				currDir = BSI.BPB_RootClus;
+			}
+			else{
+				currDir = (FI.high_cluster << 16 | FI.low_cluster);
+			}
+			return 1; 
+		}			
+		/*if filename found but wasn't a file*/
+		else if((strcmp(tempFileName, file_name) == 0) && FI.attribute != 0x20){
+			return -1;
+		}
+	}
+	/*return 0 at the end if it was never found*/
+	return 0;
+}
+
 char* deblank(char* input)                                         
 {
 	int i,j;
@@ -558,12 +665,10 @@ void print_file_info(){
 	}
 	printf("\n");
 
-	/*DEBUG comment this out later
-	printf("DIR attribute is: 0x%02X\n", FI.attribute);
-	printf("DIR HI cluster is: %d\n", FI.high_cluster);
-	printf("DIR LO cluster is: %d\n", FI.low_cluster);
-	printf("DIR file size is: %d\n", FI.file_size);
-	*/
+	  printf("DIR attribute is: 0x%02X\n", FI.attribute);
+	  printf("DIR HI cluster is: %d\n", FI.high_cluster);
+	  printf("DIR LO cluster is: %d\n", FI.low_cluster);
+	  printf("DIR file size is: %d\n", FI.file_size);
 }
 
 
@@ -574,7 +679,7 @@ void find_next_cluster(uint32_t clusterNum){
 
 	/*this moves fptr1 to start of FAT region*/
 	fseek(fptr1, start_FAT, SEEK_SET);
-	
+
 	for(i = 0; i <= clusterNum; i++){
 		fread(&secBuff, 1, 4, fptr1);
 	}
