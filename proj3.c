@@ -34,7 +34,7 @@ typedef struct Boot_Sector_Info{
 	uint16_t BPB_FATSz16;
 	uint16_t BPB_SecPerTrk;
 	uint16_t BPB_NumHeads;
-	int32_t BPB_HiddSec;
+	uint32_t BPB_HiddSec;
 	uint32_t BPB_TotSec32;
 
 	/*START OF SECOND TABLE FOR FAT32*/
@@ -58,7 +58,6 @@ typedef struct Boot_Sector_Info{
 } __attribute__((packed)) boot_sector_info;
 
 typedef struct File_Info{
-
 	unsigned char skip0[32];
 	unsigned char filename[11];
 	uint8_t attribute;
@@ -69,10 +68,21 @@ typedef struct File_Info{
 	uint32_t file_size;
 } __attribute__((packed)) file_info; 
 
+typedef struct Temp_File_Info{
+	unsigned char skip0[32];
+	unsigned char filename[11];
+	uint8_t attribute;
+	uint8_t skip1[8];
+	uint16_t high_cluster;
+	uint8_t skip2[4];
+	uint16_t low_cluster;
+	uint32_t file_size;
+} __attribute__((packed)) temp_file_info;
 
 /*these are globally used throughout the program*/
 struct File_Info FI;
 struct Boot_Sector_Info BSI;
+struct Temp_File_Info TFI;
 FILE* fptr;
 FILE* fptr1;
 /*this would be a cluster number*/
@@ -85,6 +95,8 @@ int my_exit(int status);
 int check_if_dir(unsigned char* dir_name);
 int check_if_file(unsigned char* file_name);
 int find_FAT_entry_offset();
+int find_empty_cluster();
+int creat_file(unsigned char* file_name);
 void info();
 void addToken(instruction* instr_ptr, char* tok);
 void printTokens(instruction* instr_ptr);
@@ -94,10 +106,12 @@ void print_dir_entries();
 void ls_dir(unsigned char* dir_name);
 void cd_dir(unsigned char* dir_name);
 void size_dir(unsigned char* file_name);
+void find_next_cluster(uint32_t clusterNum);
+void fill_temp_file_info(unsigned char* file_name, int clusterNum);
+void write_data(int clusterNum, unsigned char* file_name);
 char* deblank(char* input);
 uint32_t find_FAT_sector_number();
 unsigned long find_first_data_sector();
-void find_next_cluster(uint32_t clusterNum);
 
 /*---------------------------------------------------------*/
 
@@ -118,7 +132,7 @@ int main(int argc, char *argv[]){
 	printf("%s was the argument\n\n",argv[1]);
 
 	/*open the second argument of the executable in read-only binary*/
-	fptr = fopen(argv[1],"rb");
+	fptr = fopen(argv[1],"rb+");
 
 	if(!fptr){
 		printf("ERROR: fptr is invalid!\n\n");
@@ -127,7 +141,7 @@ int main(int argc, char *argv[]){
 
 	/*open the second argument of the executable in read-only binary
 	 * this file pointer is for FAT region*/
-	fptr1 = fopen(argv[1],"rb");
+	fptr1 = fopen(argv[1],"rb+");
 
 	if(!fptr1){
 		printf("ERROR: fptr1 is invalid!\n\n");
@@ -233,6 +247,17 @@ int main(int argc, char *argv[]){
 				printf("ERROR too many arguments.\n");
 			}
 		}
+		else if(strcmp(instr.tokens[0], "creat") == 0){
+			if(instr.numTokens == 1){
+				printf("ERROR, please provide an argument.\n");
+			}
+			else if(instr.numTokens == 2){
+				creat_file(instr.tokens[1]);
+			}
+			else{
+				printf("ERROR, too many arguments.\n");
+			}
+		}
 		else{
 			clearInstruction(&instr);
 		}
@@ -251,6 +276,7 @@ int my_exit(int status){
 	printf("\ncalling my_exit with status: %d\n",status);
 	//free up space from fopen
 	fclose(fptr);
+	fclose(fptr1);
 	exit(status);
 }
 
@@ -504,6 +530,27 @@ void size_dir(unsigned char* file_name){
 
 /*----------------------------------------- END OF PART 5: SIZE FILENAME[5] ------------------------------------------ */
 
+
+/*----------------------------------------- PART 6: CREAT FILENAME[5]  ------------------------------------------ */
+
+int creat_file(unsigned char* file_name){
+	int flag;
+
+	/*This checks for the first empty cluster*/
+	flag = find_empty_cluster();
+
+	if(flag == -1)
+		return flag;
+	else
+		write_data(flag, file_name);
+	/*write data linking to the cluster number found*/
+
+
+}
+
+/*----------------------------------------- END OF PART 6: CREAT FILENAME[5]  ------------------------------------------ */
+
+
 void print_dir_entries(){
 
 	/*the first data sector of a cluster number is found by finding the first Data Sector and then multiplying
@@ -671,7 +718,8 @@ void print_file_info(){
 	  printf("DIR file size is: %d\n", FI.file_size);
 }
 
-
+/*this finds the next cluster for the current directory
+ * and stores it in the global secBuff*/
 void find_next_cluster(uint32_t clusterNum){
 	int i;
 
@@ -684,6 +732,126 @@ void find_next_cluster(uint32_t clusterNum){
 		fread(&secBuff, 1, 4, fptr1);
 	}
 }
+
+int find_empty_cluster(){
+	/*this function returns i on success, which is the empty cluster number*/
+	int i;
+
+	//used for fwrite, means end of Cluster
+	uint8_t emptyClusBuff[4] = {0xFF, 0xFF, 0xFF, 0x0F};
+
+	uint32_t start_FAT = BSI.BPB_RsvdSecCnt * BSI.BPB_BytesPerSec;
+	/*second FAT region starts where the first FAT region ends*/
+	uint32_t start_second_FAT = BSI.BPB_RsvdSecCnt * BSI.BPB_BytesPerSec + (1009 * 4);
+
+	/*DEBUG write code to check second FAT is identical*/
+
+
+	/*move fptr1 to start of FAT region*/
+	fseek(fptr1, start_FAT, SEEK_SET);
+
+	/*There's 1009 total clusters in each FAT region*/
+	for(i = 0; i <= 1009; i++){
+		fread(&secBuff, 1, 4, fptr1);
+
+		/*if an empty cluster is found*/
+		if(secBuff[0] == 0x00 && secBuff[1] == 0x00 && secBuff[2] == 0x00 && secBuff[3] == 0x00){
+			/*move fptr1 to right before the empty cluster for writing*/
+			fseek(fptr1, start_FAT + (i * 4), SEEK_SET);
+			/*write the end of cluster marker over the empty cluster*/
+			fwrite(emptyClusBuff,1, 4, fptr1);
+
+			printf("DEBUG overwrote FAT32.img file with empty cluster.\n");
+
+			return i;
+		}
+	}
+	printf("ERROR no empty cluster found, FAT table full.\n");
+	return -1;
+}
+
+void write_data(int clusterNum, unsigned char* file_name){
+
+	int oldCurrDir = currDir;
+	int moreClustersFlag = 0;
+
+	while(moreClustersFlag == 0){
+		/*flag that sets to 1 when a free entry is found in current cluster to write new data*/
+		int freeEntry = 0;
+
+		/*check for an empty slot in current cluster/directory*/
+
+		/*jump to first data sector of the currDir/cluster number*/
+		unsigned long FirstSectorofCluster = find_first_data_sector() + ((currDir - 2) * BSI.BPB_SecPerClus);
+
+		/*offset of bytes*/
+		int entryNum;
+
+		fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec, SEEK_SET);
+
+		/*512 bytes for data sector of a cluster and each entry is 64 bytes*/
+		for(entryNum = 0; entryNum < 8; entryNum++){
+
+			/*read the information into an array of entries struct*/
+			fread(&FI, sizeof(struct File_Info), 1, fptr);
+
+			/*if it starts reading in 0s, means no more valid entries, so can break out of loop*/
+			if(FI.attribute == 0x00){
+				freeEntry = 1;
+				break;
+			}
+		}
+
+		/*if 1, can write new data into this cluster
+		 * each entry is 64 bytes*/
+		if(freeEntry == 1){
+			fseek(fptr, ((FirstSectorofCluster * BSI.BPB_BytesPerSec) + (entryNum * 64)), SEEK_SET);
+
+			/*put data into temp struct*/
+			fill_temp_file_info(file_name, clusterNum);
+
+			/*write struct info into empty data section of current cluster*/
+			fwrite(&TFI, 1, sizeof(struct Temp_File_Info), fptr);
+			moreClustersFlag = 1;
+		}
+		/*else will have to make new cluster for new data in current cluster*/
+		else{
+			find_next_cluster(currDir);
+
+			/*means there is no other cluster*/
+			if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+				/*DEBUG will have to create more clusters for this cluster*/
+			}
+
+			/*set currDir to new cluster number*/
+			currDir = secBuff[1] << 8 | secBuff[0];
+
+			//fill_temp_file_info(file_name, clusterNum);
+		}
+	}
+	currDir = oldCurrDir;
+}
+
+
+void fill_temp_file_info(unsigned char* file_name, int clusterNum){
+
+	/*fill temp_file_info with data*/	
+	for(i = 0; i < 32; i++){
+		TFI.skip0[i] = 0x00;
+	}
+
+	strcpy(TFI.filename, file_name);
+	TFI.attribute = 0x20;
+
+	for(i = 0; i < 8; i++){
+		TFI.skip1[i] = 0x00;
+	}
+
+	TFI.high_cluster = 0;
+	TFI.low_cluster = clusterNum; 
+	TFI.file_size = 0;
+}
+
 
 unsigned long find_first_data_sector(){
 	uint32_t RootDirSectors, FirstDataSector;
