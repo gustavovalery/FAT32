@@ -109,6 +109,7 @@ void size_dir(unsigned char* file_name);
 void find_next_cluster(uint32_t clusterNum);
 void fill_temp_file_info(unsigned char* file_name, int clusterNum);
 void write_data(int clusterNum, unsigned char* file_name);
+void overwrite_last_cluster(int newCluster);
 char* deblank(char* input);
 uint32_t find_FAT_sector_number();
 unsigned long find_first_data_sector();
@@ -360,10 +361,6 @@ void ls_dir(unsigned char* dir_name){
 		print_dir_entries();
 
 		while(1) {
-
-			if(currDir == 2){
-				break;
-			}
 
 			/*find next cluster for current directory*/
 			find_next_cluster(currDir);	
@@ -712,10 +709,12 @@ void print_file_info(){
 	}
 	printf("\n");
 
+	/*
 	  printf("DIR attribute is: 0x%02X\n", FI.attribute);
 	  printf("DIR HI cluster is: %d\n", FI.high_cluster);
 	  printf("DIR LO cluster is: %d\n", FI.low_cluster);
 	  printf("DIR file size is: %d\n", FI.file_size);
+	  */
 }
 
 /*this finds the next cluster for the current directory
@@ -731,6 +730,8 @@ void find_next_cluster(uint32_t clusterNum){
 	for(i = 0; i <= clusterNum; i++){
 		fread(&secBuff, 1, 4, fptr1);
 	}
+
+
 }
 
 int find_empty_cluster(){
@@ -741,11 +742,6 @@ int find_empty_cluster(){
 	uint8_t emptyClusBuff[4] = {0xFF, 0xFF, 0xFF, 0x0F};
 
 	uint32_t start_FAT = BSI.BPB_RsvdSecCnt * BSI.BPB_BytesPerSec;
-	/*second FAT region starts where the first FAT region ends*/
-	uint32_t start_second_FAT = BSI.BPB_RsvdSecCnt * BSI.BPB_BytesPerSec + (1009 * 4);
-
-	/*DEBUG write code to check second FAT is identical*/
-
 
 	/*move fptr1 to start of FAT region*/
 	fseek(fptr1, start_FAT, SEEK_SET);
@@ -761,8 +757,6 @@ int find_empty_cluster(){
 			/*write the end of cluster marker over the empty cluster*/
 			fwrite(emptyClusBuff,1, 4, fptr1);
 
-			printf("DEBUG overwrote FAT32.img file with empty cluster.\n");
-
 			return i;
 		}
 	}
@@ -774,6 +768,7 @@ void write_data(int clusterNum, unsigned char* file_name){
 
 	int oldCurrDir = currDir;
 	int moreClustersFlag = 0;
+	int newCluster;
 
 	while(moreClustersFlag == 0){
 		/*flag that sets to 1 when a free entry is found in current cluster to write new data*/
@@ -820,16 +815,44 @@ void write_data(int clusterNum, unsigned char* file_name){
 
 			/*means there is no other cluster*/
 			if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
-				/*DEBUG will have to create more clusters for this cluster*/
+				/*get the cluster number of the next empty cluster 
+				 * after replacing it with EoC mark*/
+				newCluster = find_empty_cluster();
+
+				/*overwrite last cluster with EoC mark to point to
+				 * the newly created cluster
+				 * also makes secBuff the new cluster*/
+				overwrite_last_cluster(newCluster);
 			}
 
 			/*set currDir to new cluster number*/
 			currDir = secBuff[1] << 8 | secBuff[0];
-
-			//fill_temp_file_info(file_name, clusterNum);
 		}
 	}
 	currDir = oldCurrDir;
+}
+
+
+/*this finds the last cluster of the current directory 
+ * and overwrites it to point to the new cluster*/
+void overwrite_last_cluster(int newCluster){
+
+	 uint8_t newClusBuff[4] = {newCluster, newCluster >> 8, newCluster >> 16, newCluster >> 24};
+
+	/*beginning of FAT region*/
+	uint32_t start_FAT = BSI.BPB_RsvdSecCnt * BSI.BPB_BytesPerSec;
+
+	/*this moves fptr1 to beginning of EoC cluster*/
+	fseek(fptr1, start_FAT + (4 * currDir), SEEK_SET);
+
+	/*write new cluster marker over EoC cluster*/
+	fwrite(newClusBuff, 1, 4, fptr1);
+
+	/*move back to beginning of cluster*/
+	fseek(fptr1, start_FAT + (4 * currDir), SEEK_SET);
+
+	/*read in new cluster number to secBuff*/
+	fread(&secBuff, 1, 4, fptr1);
 }
 
 
