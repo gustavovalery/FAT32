@@ -79,10 +79,23 @@ typedef struct Temp_File_Info{
 	uint32_t file_size;
 } __attribute__((packed)) temp_file_info;
 
+typedef struct Temp_Dir_Info{
+	unsigned char skip0[32];
+	unsigned char dirname[11];
+	uint8_t attribute;
+	uint8_t skip1[8];
+	uint16_t high_cluster;
+	uint8_t skip2[4];
+	uint16_t low_cluster;
+	uint32_t dir_size;
+} __attribute__((packed)) temp_dir_info;
+
+
 /*these are globally used throughout the program*/
 struct File_Info FI;
 struct Boot_Sector_Info BSI;
 struct Temp_File_Info TFI;
+struct Temp_Dir_Info TDI;
 FILE* fptr;
 FILE* fptr1;
 /*this would be a cluster number*/
@@ -97,6 +110,7 @@ int check_if_file(unsigned char* file_name);
 int find_FAT_entry_offset();
 int find_empty_cluster();
 int creat_file(unsigned char* file_name);
+int mkdir(unsigned char* dir_name);
 void info();
 void addToken(instruction* instr_ptr, char* tok);
 void printTokens(instruction* instr_ptr);
@@ -108,7 +122,11 @@ void cd_dir(unsigned char* dir_name);
 void size_dir(unsigned char* file_name);
 void find_next_cluster(uint32_t clusterNum);
 void fill_temp_file_info(unsigned char* file_name, int clusterNum);
+void fill_temp_file_info1(unsigned char* file_name, int clusterNum);
+void fill_temp_dir_info(unsigned char* dir_name, int clusterNum);
 void write_data(int clusterNum, unsigned char* file_name);
+void write_data1(int clusterNum, unsigned char* file_name);
+void write_dir(int flag, unsigned char* file_name);
 void overwrite_last_cluster(int newCluster);
 char* deblank(char* input);
 uint32_t find_FAT_sector_number();
@@ -257,6 +275,17 @@ int main(int argc, char *argv[]){
 			}
 			else{
 				printf("ERROR, too many arguments.\n");
+			}
+		}
+		else if(strcmp(instr.tokens[0], "mkdir") == 0){
+			if(instr.numTokens == 1){
+				printf("ERROR: please provide an argument.\n");
+			}
+			else if(instr.numTokens == 2){
+				mkdir(instr.tokens[1]);
+			}
+			else{
+				printf("ERROR: too many arguments.\n");
 			}
 		}
 		else{
@@ -532,8 +561,36 @@ void size_dir(unsigned char* file_name){
 
 int creat_file(unsigned char* file_name){
 	int flag;
+	int fileFlag;
+	int oldCurrDir = currDir;
+		
+	/*check if file is in current cluster*/	
+	fileFlag = check_if_file(file_name);
 
-	/*This checks for the first empty cluster*/
+	/*while the filename hasn't been found yet*/
+	while(fileFlag == 0){
+		find_next_cluster(currDir);	
+
+		/*break cluster following if there are no other clusters to follow*/
+		if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+			break;
+		}
+
+		/*change currDir to new cluster*/
+		currDir = secBuff[1] << 8 | secBuff[0];
+
+		/*check if file is available in new cluster*/
+		fileFlag = check_if_file(file_name);	
+	}
+	/*if flag is 1, means entry was found and was a file*/
+	if(fileFlag == 1){
+		printf("ERROR: filename already exists.\n");
+		currDir = oldCurrDir;
+		return -1;
+	}
+
+	/*This checks for the first empty cluster
+	 * if found, flag is set to empty cluster number*/
 	flag = find_empty_cluster();
 
 	if(flag == -1)
@@ -541,11 +598,56 @@ int creat_file(unsigned char* file_name){
 	else
 		write_data(flag, file_name);
 	/*write data linking to the cluster number found*/
-
-
 }
 
 /*----------------------------------------- END OF PART 6: CREAT FILENAME[5]  ------------------------------------------ */
+
+/*----------------------------------------- PART 7: MKDIR DIRNAME[5]  ------------------------------------------ */
+
+int mkdir(unsigned char* dir_name){
+	int flag;
+	int dirFlag;
+	int oldCurrDir = currDir;
+
+	/*check if dir is in current cluster*/	
+	dirFlag = check_if_dir(dir_name);
+
+	/*while the dirname hasn't been found yet*/
+	while(dirFlag == 0){
+		find_next_cluster(currDir);	
+
+		/*break cluster following if there are no other clusters to follow*/
+		if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+			break;
+		}
+
+		/*change currDir to new cluster*/
+		currDir = secBuff[1] << 8 | secBuff[0];
+
+		/*check if dir is available in new cluster*/
+		dirFlag = check_if_dir(dir_name);	
+	}
+	/*if flag is 1, means entry was found and was a dir*/
+	if(dirFlag == 1){
+		printf("ERROR: directory name already exists.\n");
+		currDir = oldCurrDir;
+		return -1;
+	}
+
+	/*check for the first empty cluster
+	 * if found, flag is set to empty cluster number*/
+	flag = find_empty_cluster();
+
+	if(flag == -1)
+		return flag;
+	else
+		write_dir(flag, dir_name);
+	/*DEBUG new function here*/
+
+}
+
+
+/*----------------------------------------- END OF PART 7: MKDIR DIRNAME[5]  ------------------------------------------ */
 
 
 void print_dir_entries(){
@@ -714,7 +816,7 @@ void print_file_info(){
 	  printf("DIR HI cluster is: %d\n", FI.high_cluster);
 	  printf("DIR LO cluster is: %d\n", FI.low_cluster);
 	  printf("DIR file size is: %d\n", FI.file_size);
-	  */
+	*/
 }
 
 /*this finds the next cluster for the current directory
@@ -832,6 +934,170 @@ void write_data(int clusterNum, unsigned char* file_name){
 	currDir = oldCurrDir;
 }
 
+void write_data1(int clusterNum, unsigned char* file_name){
+
+	int oldCurrDir = currDir;
+	int moreClustersFlag = 0;
+	int newCluster;
+
+	while(moreClustersFlag == 0){
+		/*flag that sets to 1 when a free entry is found in current cluster to write new data*/
+		int freeEntry = 0;
+
+		/*check for an empty slot in current cluster/directory*/
+
+		/*jump to first data sector of the currDir/cluster number*/
+		unsigned long FirstSectorofCluster = find_first_data_sector() + ((currDir - 2) * BSI.BPB_SecPerClus);
+
+		/*offset of bytes*/
+		int entryNum;
+
+		fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec, SEEK_SET);
+
+		/*512 bytes for data sector of a cluster and each entry is 64 bytes*/
+		for(entryNum = 0; entryNum < 8; entryNum++){
+
+			/*read the information into an array of entries struct*/
+			fread(&FI, sizeof(struct File_Info), 1, fptr);
+
+			/*if it starts reading in 0s, means no more valid entries, so can break out of loop*/
+			if(FI.attribute == 0x00){
+				freeEntry = 1;
+				break;
+			}
+		}
+
+		/*if 1, can write new data into this cluster
+		 * each entry is 64 bytes*/
+		if(freeEntry == 1){
+			fseek(fptr, ((FirstSectorofCluster * BSI.BPB_BytesPerSec) + (entryNum * 64)), SEEK_SET);
+
+			/*put data into temp struct, use different 
+			 * temp file that fills as a dir since
+			 * original fill_dir doesn't work for some 
+			 * unknown reason*/
+			fill_temp_file_info1(file_name, clusterNum);
+
+			/*write struct info into empty data section of current cluster*/
+			fwrite(&TFI, 1, sizeof(struct Temp_File_Info), fptr);
+			moreClustersFlag = 1;
+		}
+		/*else will have to make new cluster for new data in current cluster*/
+		else{
+			find_next_cluster(currDir);
+
+			/*means there is no other cluster*/
+			if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+				/*get the cluster number of the next empty cluster 
+				 * after replacing it with EoC mark*/
+				newCluster = find_empty_cluster();
+
+				/*overwrite last cluster with EoC mark to point to
+				 * the newly created cluster
+				 * also makes secBuff the new cluster*/
+				overwrite_last_cluster(newCluster);
+			}
+
+			/*set currDir to new cluster number*/
+			currDir = secBuff[1] << 8 | secBuff[0];
+		}
+	}
+	currDir = oldCurrDir;
+}
+
+
+
+
+
+
+
+/*this writes the new directory into the directory*/
+void write_dir(int clusterNum, unsigned char* dir_name){
+
+	int oldCurrDir = currDir;
+	int moreClustersFlag = 0;
+	int newCluster;
+
+	while(moreClustersFlag == 0){
+		/*flag that sets to 1 when a free entry is found in current cluster to write new data*/
+		int freeEntry = 0;
+
+		/*check for an empty slot in current cluster/directory*/
+
+		/*jump to first data sector of the currDir/cluster number*/
+		unsigned long FirstSectorofCluster = find_first_data_sector() + ((currDir - 2) * BSI.BPB_SecPerClus);
+
+		/*offset of bytes*/
+		int entryNum;
+
+		fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec, SEEK_SET);
+
+		/*512 bytes for data sector of a cluster and each entry is 64 bytes*/
+		for(entryNum = 0; entryNum < 8; entryNum++){
+
+			/*read the information into an array of entries struct*/
+			fread(&FI, sizeof(struct File_Info), 1, fptr);
+
+			/*if it starts reading in 0s, means no more valid entries, so can break out of loop*/
+			if(FI.attribute == 0x00){
+				freeEntry = 1;
+				break;
+			}
+		}
+
+		/*if 1, can write new data into this cluster
+		 * each entry is 64 bytes*/
+		if(freeEntry == 1){
+			fseek(fptr, ((FirstSectorofCluster * BSI.BPB_BytesPerSec) + (entryNum * 64)), SEEK_SET);
+
+			/*put dir data into temp struct*/
+			fill_temp_dir_info(dir_name, clusterNum);
+
+			/*write struct info into empty data section of current cluster*/
+			fwrite(&TDI, 1, sizeof(struct Temp_Dir_Info), fptr);
+
+			/*DEBUG after this should write .. entry into new dir
+			 * basically have to write new file called ".."
+			 * and set low cluster to oldCurrDir*/
+
+			oldCurrDir = currDir;
+
+			cd_dir(dir_name);
+	
+			/*a different write data that writes as a dir, won't work
+			 * with normal write_dir for some reason*/
+			write_data1(oldCurrDir, "..");
+
+			/*
+			fill_temp_file_info("..", oldCurrDir);
+			fwrite(&TFI, 1, sizeof(struct Temp_File_Info), fptr);	
+			*/
+
+			moreClustersFlag = 1;
+		}
+		/*else will have to make new cluster for new data in current cluster*/
+		else{
+			find_next_cluster(currDir);
+
+			/*means there is no other cluster*/
+			if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+				/*get the cluster number of the next empty cluster 
+				 * after replacing it with EoC mark*/
+				newCluster = find_empty_cluster();
+
+				/*overwrite last cluster with EoC mark to point to
+				 * the newly created cluster
+				 * also makes secBuff the new cluster*/
+				overwrite_last_cluster(newCluster);
+			}
+
+			/*set currDir to new cluster number*/
+			currDir = secBuff[1] << 8 | secBuff[0];
+		}
+	}
+	currDir = oldCurrDir;
+}
+
 
 /*this finds the last cluster of the current directory 
  * and overwrites it to point to the new cluster*/
@@ -857,6 +1123,7 @@ void overwrite_last_cluster(int newCluster){
 
 
 void fill_temp_file_info(unsigned char* file_name, int clusterNum){
+	int i;
 
 	/*fill temp_file_info with data*/	
 	for(i = 0; i < 32; i++){
@@ -873,6 +1140,46 @@ void fill_temp_file_info(unsigned char* file_name, int clusterNum){
 	TFI.high_cluster = 0;
 	TFI.low_cluster = clusterNum; 
 	TFI.file_size = 0;
+}
+
+void fill_temp_file_info1(unsigned char* file_name, int clusterNum){
+	int i;
+
+	/*fill temp_file_info with data*/	
+	for(i = 0; i < 32; i++){
+		TFI.skip0[i] = 0x00;
+	}
+
+	strcpy(TFI.filename, file_name);
+	TFI.attribute = 0x10;
+
+	for(i = 0; i < 8; i++){
+		TFI.skip1[i] = 0x00;
+	}
+
+	TFI.high_cluster = 0;
+	TFI.low_cluster = clusterNum; 
+	TFI.file_size = 0;
+}
+
+void fill_temp_dir_info(unsigned char* dir_name, int clusterNum){
+	int i ;
+
+	/*fill temp_dir_info with data*/
+	for(i = 0; i < 32; i++){
+		TDI.skip0[i] = 0x00;	
+	}
+
+	strcpy(TDI.dirname, dir_name);
+	TDI.attribute = 0x10;
+
+	for(i = 0; i < 8; i++){
+		TDI.skip1[i] = 0x00;
+	}
+
+	TDI.high_cluster = 0;
+	TDI.low_cluster = clusterNum;
+	TDI.dir_size = 0;
 }
 
 
