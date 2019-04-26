@@ -113,6 +113,7 @@ int find_empty_cluster();
 int check_if_empty(int clusterNum);
 int creat_file(unsigned char* file_name);
 int mkdir(unsigned char* dir_name);
+int arg_length(unsigned char* arg);
 void info();
 void addToken(instruction* instr_ptr, char* tok);
 void printTokens(instruction* instr_ptr);
@@ -124,6 +125,7 @@ void cd_dir(unsigned char* dir_name);
 void size_file(unsigned char* file_name);
 void rm_filename(unsigned char* file_name);
 void rmdir(unsigned char* dir_name);
+void rm(unsigned char* file_name);
 void find_next_cluster(uint32_t clusterNum);
 void fill_temp_file_info(unsigned char* file_name, int clusterNum);
 void fill_temp_file_info1(unsigned char* file_name, int clusterNum);
@@ -280,7 +282,12 @@ int main(int argc, char *argv[]){
 				printf("ERROR, please provide an argument.\n");
 			}
 			else if(instr.numTokens == 2){
-				creat_file(instr.tokens[1]);
+				if(arg_length(instr.tokens[1]) <= 11){
+					creat_file(instr.tokens[1]);
+				}
+				else{
+					printf("ERROR: filename too long. Must be 11 characters or less.\n");
+				}
 			}
 			else{
 				printf("ERROR, too many arguments.\n");
@@ -291,7 +298,12 @@ int main(int argc, char *argv[]){
 				printf("ERROR: please provide an argument.\n");
 			}
 			else if(instr.numTokens == 2){
-				mkdir(instr.tokens[1]);
+				if(arg_length(instr.tokens[1]) <= 11){
+					mkdir(instr.tokens[1]);
+				}
+				else{
+					printf("ERROR: directory name too long. Must be 11 characters or less.\n");
+				}
 			}
 			else{
 				printf("ERROR: too many arguments.\n");
@@ -351,7 +363,7 @@ void info(){
 	printf("BPB_NumFATS (must be 2): %d\n", BSI.BPB_NumFATS);
 	printf("BPB_RootEntCnt (must be 0): %d\n", BSI.BPB_RootEntCnt);
 	printf("BPB_TotSec16: %d\n", BSI.BPB_TotSec16);
-	printf("BPB_Media: %d\n", BSI.BPB_Media);
+	printf("BPB_Media: 0x%02X\n", BSI.BPB_Media);
 	printf("BPB_FATSz16 (should be 0): %d\n", BSI.BPB_FATSz16);
 	printf("BPB_SecPerTrk: %d\n", BSI.BPB_SecPerTrk);
 	printf("BPB_NumHeads: %d\n", BSI.BPB_NumHeads);
@@ -678,7 +690,13 @@ int mkdir(unsigned char* dir_name){
 
 /*----------------------------------------- PART 12: RM FILENAME[6] ------------------------------------------ */
 
-void rm_filename(unsigned char* file_name){
+void rm(unsigned char* file_name){
+	int oldCurrDir = currDir;
+
+	/*find next cluster*/
+
+	/*if stm: if at end, start deleting stuff, */
+
 
 }
 
@@ -1457,6 +1475,14 @@ int find_FAT_entry_offset(){
 
 	return ThisFATEntOffset;
 }
+
+
+int arg_length(unsigned char* arg){
+	int i;
+	for(i=0; arg[i]!='\0'; i++);
+	return i;
+}
+
 
 /**************************************************************************************************************/
 void addToken(instruction* instr_ptr, char* tok){
