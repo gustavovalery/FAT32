@@ -137,8 +137,10 @@ void write_dir(int flag, unsigned char* file_name);
 void overwrite_last_cluster(int newCluster);
 void delete_entries(int clusterNum);
 void delete_cluster(int clusterNum);
-void delete_data(unsigned char* name);
+void delete_data_dir(unsigned char* name);
+void delete_data_file(unsigned char* name);
 void fill_empty_file_info();
+void wipe_cluster_data(int clusterNum);
 char* deblank(char* input);
 uint32_t find_FAT_sector_number();
 unsigned long find_first_data_sector();
@@ -315,6 +317,17 @@ int main(int argc, char *argv[]){
 			}
 			else if(instr.numTokens == 2){
 				rmdir(instr.tokens[1]);
+			}
+			else{
+				printf("ERROR: too many arguments.\n");
+			}
+		}
+		else if(strcmp(instr.tokens[0], "rm") == 0){
+			if(instr.numTokens == 1){
+				printf("ERROR: please provide an argument.\n");
+			}
+			else if(instr.numTokens == 2){
+				rm(instr.tokens[1]);
 			}
 			else{
 				printf("ERROR: too many arguments.\n");
@@ -692,12 +705,77 @@ int mkdir(unsigned char* dir_name){
 
 void rm(unsigned char* file_name){
 	int oldCurrDir = currDir;
+	int flag, clusterNum;
 
-	/*find next cluster*/
+	/*this sets currDir to cluster of file if found*/
+	flag = check_if_file(file_name);
 
-	/*if stm: if at end, start deleting stuff, */
+	/*while the file hasn't been found, check the other clusters in current directory, if any*/
+	while(flag == 0){
 
+		find_next_cluster(currDir);
 
+		/*break out of loop if no other clusters remain*/
+		if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+			break;
+		}
+
+		/*change current cluster number to new one*/
+		currDir = secBuff[1] << 8 | secBuff[0];
+
+		/*check if name exists in this new cluster*/
+		flag = check_if_file(file_name);
+	}
+	if(flag == -1){
+		printf("ERROR: entry not a file.\n");
+	}
+	else if(flag == 0){
+		printf("ERROR: entry not found.\n");
+	}
+	else if(flag == 1){
+
+		while(1){
+			/*store cluster number of file found*/
+			clusterNum = currDir;
+
+			/*DEBUG added check for root being deleted*/
+			/*erase everything in data section of this cluster*/
+			if(clusterNum != 2){
+				wipe_cluster_data(clusterNum);
+			}
+
+			/*find the next cluster number
+			 * currDir gets set to next one*/
+			find_next_cluster(clusterNum);
+
+			/*break out of loop if no other clusters remain
+			 * but first set cluster value to 0's*/
+			if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+				/*DEBUG added check for root being deleted*/
+				if(clusterNum != 2){
+					delete_cluster(clusterNum);
+				}
+				break;
+			}
+
+			/*change current cluster number to new one*/
+			currDir = secBuff[1] << 8 | secBuff[0];
+
+			/*0 out previous cluster number before moving on to next one*/	
+			/*DEBUG added check for root being deleted*/
+			if(clusterNum != 2){
+				delete_cluster(clusterNum);
+			}
+		}
+	}
+	/*when all is said and done, reset currDir to cluster where command was called*/
+	currDir = oldCurrDir;
+
+	/*then delete DIR entry in the cluster*/
+	delete_data_file(file_name);
+
+	/*reset current cluster again since it gets changed*/
+	currDir = oldCurrDir;
 }
 
 /*----------------------------------------- END OF PART 12: RM FILENAME[6] ------------------------------------------ */
@@ -759,7 +837,7 @@ void rmdir(unsigned char* dir_name){
 			currDir = oldCurrDir;
 
 			/*now remove name entry from current directory*/
-			delete_data(dir_name);
+			delete_data_dir(dir_name);
 		}
 	}
 	currDir = oldCurrDir;
@@ -834,7 +912,7 @@ int check_if_dir(unsigned char* dir_name){
 			/*clusters that point back to root directory are 0 for some reason, 
 			 * so make them 2 for proper navigation.*/
 
-			/*only used when delete_data calls this function*/
+			/*only used when delete_data_dir calls this function*/
 			entryNumber = entryNum;
 
 			if((FI.high_cluster << 16 | FI.low_cluster) == 0){
@@ -888,6 +966,10 @@ int check_if_file(unsigned char* file_name){
 		if((strcmp(tempFileName, file_name) == 0) && FI.attribute == 0x20){
 			/*clusters that point back to root directory are 0 for some reason, 
 			 * so make them 2 for proper navigation.*/
+
+			/*only used when delete_data_file calls this function*/
+			entryNumber = entryNum;
+
 			if((FI.high_cluster << 16 | FI.low_cluster) == 0){
 				currDir = BSI.BPB_RootClus;
 			}
@@ -934,12 +1016,12 @@ void print_file_info(){
 	}
 	printf("\n");
 
-	/*
+	/*DEBUG*/
 	  printf("DIR attribute is: 0x%02X\n", FI.attribute);
 	  printf("DIR HI cluster is: %d\n", FI.high_cluster);
 	  printf("DIR LO cluster is: %d\n", FI.low_cluster);
 	  printf("DIR file size is: %d\n", FI.file_size);
-	*/
+	
 }
 
 /*this finds the next cluster for the current directory
@@ -1399,8 +1481,57 @@ void delete_cluster(int clusterNum){
 
 }
 
-/*deletes data entry/name from current directory*/
-void delete_data(unsigned char* name){
+
+/*deletes data entry/name for directory from current directory*/
+void delete_data_file(unsigned char* name){
+	int oldCurrDir = currDir;
+	int entryNum, flag;
+	int numDir;
+
+	/*currDir gets changed to clusterNum of where entry was found*/
+	flag = check_if_file(name);
+
+	/*if dir is in first cluster, set that*/
+	numDir = oldCurrDir;
+
+	/*while the name isn't found in current cluster, check other clusters if there are more*/
+	while(flag == 0){
+		find_next_cluster(currDir);	
+
+		/*break if no other clusters*/
+		if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+			break;
+		}
+
+		/*change currDir to new cluster*/
+		currDir = secBuff[1] << 8 | secBuff[0];
+
+		/*else if dir was in a different cluster, set that*/
+		numDir = currDir;	
+
+		/*now check if name is available in this new cluster*/
+		flag = check_if_file(name);
+	}
+
+	/*global entryNumber gets set during check_if_dir*/
+	entryNum = entryNumber;
+
+	fill_empty_file_info();
+
+	unsigned long FirstSectorofCluster = find_first_data_sector() + ((numDir - 2) * BSI.BPB_SecPerClus);
+
+	/*move fptr to right before the data for the entry starts*/
+	fseek(fptr, (FirstSectorofCluster * BSI.BPB_BytesPerSec) + (entryNum * 64), SEEK_SET);
+
+	/*overwrite entry with 0's*/
+	fwrite(&TFI, 1, sizeof(struct Temp_File_Info), fptr);
+}
+
+
+
+
+/*deletes data entry/name for directory from current directory*/
+void delete_data_dir(unsigned char* name){
 	int oldCurrDir = currDir;
 	int entryNum, flag;
 	int numDir;
@@ -1443,6 +1574,25 @@ void delete_data(unsigned char* name){
 	/*overwrite entry with 0's*/
 	fwrite(&TFI, 1, sizeof(struct Temp_File_Info), fptr);
 }
+
+/*wipe all of the data in the cluster specified*/
+void wipe_cluster_data(int clusterNum){
+	int i;
+
+	/*fill temp file info with "empty" info (all 0's)*/
+	fill_empty_file_info();
+	
+	unsigned long FirstSectorofCluster = find_first_data_sector() + ((clusterNum - 2) * BSI.BPB_SecPerClus); 
+
+	/*place fptr at data sector of cluster number specified*/
+	fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec, SEEK_SET);
+
+	/*replace all entries with all 0's*/
+	for(i = 0; i < 8; i++){
+		fwrite(&TFI, 1, sizeof(struct Temp_File_Info), fptr);
+	}
+}
+
 
 unsigned long find_first_data_sector(){
 	uint32_t RootDirSectors, FirstDataSector;
