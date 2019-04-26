@@ -790,7 +790,7 @@ void rmdir(unsigned char* dir_name){
 	 * flag = 0 means name not found
 	 * flag = 1 means name found and is a dir*/
 	int flag, emptyFlag;
-	int clusterNum;
+	int clusterNum, firstCluster, oldCluster;
 
 	/*check if name is a dir entry in the current cluster
 	 * if so, currDir gets set to that entries clusterNum*/
@@ -824,15 +824,67 @@ void rmdir(unsigned char* dir_name){
 		clusterNum = currDir;
 		emptyFlag = check_if_empty(currDir);
 
+		/*DEBUG should check to see that data in other clusters are empty too
+		 * DEBUG also added firstCluster = currDir here
+		 * and added while loop too*/
+
+		firstCluster = currDir;
+
+		while(emptyFlag < 2){
+			find_next_cluster(currDir);		
+
+			/*break out of loop if no other clusters remain*/
+			if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+			break;
+			}
+
+			/*change current cluster number to new one*/
+			currDir = secBuff[1] << 8 | secBuff[0];
+
+			emptyFlag += check_if_empty(currDir);
+		}
+
 		if(emptyFlag > 1){
 			printf("ERROR: dir entry is not empty.\nplease empty before removing.\n");
 		}
 		else{
-			/*remove rest of entries (. and ..) in directory*/
-			delete_entries(currDir);
+			/*remove rest of entries (. and ..) in directory
+			 * DEBUG changed currDir to firstCluster*/
+			delete_entries(firstCluster);
 
-			/*remove cluster entry by setting to 0's*/
-			delete_cluster(clusterNum);
+			/*remove cluster entry by setting to 0's
+			 * DEBUG should also remove all other cluster entries*/
+			//delete_cluster(clusterNum);
+	
+			/*delete all other clusters this directory occupied, 
+			 * if any, minus the first one*/
+
+			/*see if there's more clusters that follow*/
+			find_next_cluster(firstCluster);		
+
+			while(1){
+				/*break out of loop if no other clusters remain*/
+				if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+					break;
+				}
+
+				/*change current cluster number to new one*/
+				currDir = secBuff[1] << 8 | secBuff[0];
+
+				/*store previous cluster number before finding the next one*/
+				oldCluster = currDir;
+
+				/*see if there's a next one
+				 * secBuff gets set too*/
+				find_next_cluster(currDir);
+
+				/*then delete previous cluster*/
+				delete_cluster(oldCluster);
+			}
+
+			/*DEBUG moved from the top to the bottom*/
+			/*finally 0 out the first cluster*/
+			delete_cluster(firstCluster);
 
 			currDir = oldCurrDir;
 
@@ -1016,12 +1068,12 @@ void print_file_info(){
 	}
 	printf("\n");
 
-	/*DEBUG*/
+	/*
 	  printf("DIR attribute is: 0x%02X\n", FI.attribute);
 	  printf("DIR HI cluster is: %d\n", FI.high_cluster);
 	  printf("DIR LO cluster is: %d\n", FI.low_cluster);
 	  printf("DIR file size is: %d\n", FI.file_size);
-	
+	*/
 }
 
 /*this finds the next cluster for the current directory
@@ -1411,7 +1463,7 @@ int check_if_empty(int clusterNum){
 
 		/*if it starts reading in 0s, means no more valid entries*/
 		if(FI.attribute == 0x00)
-			break;
+			continue;
 
 		/*increment entryCount for each entry read*/
 		entryCount++;
