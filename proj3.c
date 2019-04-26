@@ -90,6 +90,12 @@ typedef struct Temp_Dir_Info{
 	uint32_t dir_size;
 } __attribute__((packed)) temp_dir_info;
 
+struct Open_Files{
+        unsigned char filename[11];
+        uint16_t files_first_cluster;
+        int mode;
+}LL[100];
+
 /*these are globally used throughout the program*/
 struct File_Info FI;
 struct Boot_Sector_Info BSI;
@@ -97,6 +103,7 @@ struct Temp_File_Info TFI;
 struct Temp_Dir_Info TDI;
 FILE* fptr;
 FILE* fptr1;
+int sizeLL = 0;
 /*this would be a cluster number*/
 uint32_t currDir;
 uint8_t secBuff[4];
@@ -108,6 +115,7 @@ int entryNumber;
 int my_exit(int status);
 int check_if_dir(unsigned char* dir_name);
 int check_if_file(unsigned char* file_name);
+int check_if_file2(unsigned char* file_name);
 int find_FAT_entry_offset();
 int find_empty_cluster();
 int check_if_empty(int clusterNum);
@@ -134,6 +142,8 @@ void fill_empty_file_info();
 void write_data(int clusterNum, unsigned char* file_name);
 void write_data1(int clusterNum, unsigned char* file_name);
 void write_dir(int flag, unsigned char* file_name);
+void open_file(unsigned char* file, char * MODE, struct Open_Files *LL);
+void close_file(unsigned char* file, struct Open_Files *LL);
 void overwrite_last_cluster(int newCluster);
 void delete_entries(int clusterNum);
 void delete_cluster(int clusterNum);
@@ -306,6 +316,28 @@ int main(int argc, char *argv[]){
 				else{
 					printf("ERROR: directory name too long. Must be 11 characters or less.\n");
 				}
+			}
+			else{
+				printf("ERROR: too many arguments.\n");
+			}
+		}
+		else if(strcmp(instr.tokens[0], "open") == 0){
+			if(instr.numTokens < 3){
+				printf("ERROR, please provide the correct amount of arguments.\n");
+			}
+			else if(instr.numTokens == 3){
+				open_file(instr.tokens[1], instr.tokens[2], LL);
+			}
+			else{
+				printf("ERROR: too many arguments.\n");
+			}
+		}
+		else if(strcmp(instr.tokens[0], "close") == 0){
+			if(instr.numTokens == 1){
+				printf("ERROR, please provide an argument.\n");
+			}
+			else if(instr.numTokens == 2){
+				close_file(instr.tokens[1],LL);
 			}
 			else{
 				printf("ERROR: too many arguments.\n");
@@ -698,6 +730,167 @@ int mkdir(unsigned char* dir_name){
 
 /*----------------------------------------- END OF PART 7: MKDIR DIRNAME[5] ------------------------------------------ */
 
+/*--------------------------------------- PART 8: OPEN FILENAME MODE -------------------------------------------------- */
+
+void open_file(unsigned char* file, char * MODE, struct Open_Files LL[]){
+	// ONLY VALID IF: R, W, WR, RW
+	int s = 0;
+
+	int oldCurrDir = currDir;
+	int flag;
+
+	// check CURRENT WORKING DIRECTORY for file //
+	/*check if filename is in current cluster*/
+	flag = check_if_file2(file);
+
+	/*while the filename hasn't been found yet*/
+	while(flag == 0){
+		find_next_cluster(currDir);
+
+		/*break cluster following if there are no other clusters to follow*/
+		if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+			break;
+		}
+
+		/*change currDir to new cluster*/
+		currDir = secBuff[1] << 8 | secBuff[0];
+
+		/*check if file is available in new cluster*/
+		flag = check_if_file2(file);
+
+	}
+
+	//check if FILE is not a directory
+	/*if flag is -1, means entry was found but wasn't a file*/
+	if(flag == -1){
+		printf("ERROR: entry not a file.\n");
+	}
+	/*is flag is still 0, means entry was never found*/
+	else if(flag == 0){
+		printf("ERROR: file not found.\n");
+	}
+	/*if flag = 1, means entry was found and FI is set to that entry, flag 3 means its ReadOnly*/
+	else if(flag == 1 || flag ==3){
+		//file exists, try to open it	
+
+		if( (strcmp(MODE, "r") ==0) ){
+			LL[sizeLL].mode = 1;
+		}
+		else if( (strcmp(MODE, "w") ==0) ){
+			if( flag ==3){
+				printf("ERROR cannot write to read only file");	
+			}
+			else{
+				LL[sizeLL].mode = 2;
+			}
+		}
+		else if( (strcmp(MODE, "wr") ==0) ||  (strcmp(MODE, "rw") ==0) ){
+			if( flag ==3){
+				printf("ERROR cannot write to read only file"); 
+			}
+			else{
+				LL[sizeLL].mode = 3;
+			}
+		}
+		else{
+			printf("ERROR INCORRECT MODE");
+			//return -1
+		}	
+
+
+
+		//checks the current list
+		if(sizeLL > 0){
+			// checks if its currently open
+			for(s=0;s<=sizeLL;s++){
+				if(currDir == LL[s].files_first_cluster){
+					printf("ERROR FILE IS ALREADY OPEN");
+					break;
+				}
+			}
+		}
+		else if(sizeLL ==0){
+			memcpy(LL[sizeLL].filename, file, sizeof(&file));
+			LL[sizeLL].files_first_cluster = currDir;
+			//INCREMENT sizeLL for next one and set curr back
+			sizeLL++;
+		}
+	}
+	currDir= oldCurrDir;
+}
+
+/*------------------------------------------- END OF PART 8: OPEN FILENAME MODE --------------------------------------- */
+
+/*----------------------------------------------- PART 9: CLOSE FILENAME ---------------------------------------------- */
+
+void close_file(unsigned char* file, struct Open_Files *LL){
+	int i=0;
+
+	int oldCurrDir = currDir;
+	int flag;
+
+	// check CURRENT WORKING DIRECTORY for file //
+	/*check if filename is in current cluster*/
+	flag = check_if_file2(file);
+
+	/*while the filename hasn't been found yet*/
+	while(flag == 0){
+		find_next_cluster(currDir);
+
+		/*break cluster following if there are no other clusters to follow*/
+		if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
+			break;
+		}
+
+		/*change currDir to new cluster*/
+		currDir = secBuff[1] << 8 | secBuff[0];
+
+		/*check if file is available in new cluster*/
+		flag = check_if_file2(file);
+
+	}
+
+	//check if FILE is not a directory
+	/*if flag is -1, means entry was found but wasn't a file*/
+	if(flag == -1){
+		printf("ERROR: entry not a file.\n");
+	}
+	/*is flag is still 0, means entry was never found*/
+	else if(flag == 0){
+		printf("ERROR: file not found.\n");
+	}
+	/*if flag = 1,or 3 means entry was found and FI is set to that entry*/
+	else if(flag == 1 || flag ==3){
+		int found = -1;
+		//file exists in CWD
+		//check if this file is in the table of open Files
+		for(i=0;i<sizeLL;i++){
+			if(LL[i].files_first_cluster == currDir){
+				found=1;	
+				//found now delete entry and move all other files up	
+				int j=0;
+				for(j=i; j < sizeLL ;j++){
+					LL[j] = LL[j+1];
+				}
+				//set last element on list to empty
+				struct Open_Files tempopen = {0};
+				LL[sizeLL] = tempopen;
+				printf("FILE CLOSED\n");
+				sizeLL--;
+			}
+		}
+		if(found != 1){
+			printf("Error: file not open\n");
+		}
+
+
+	}
+
+	currDir= oldCurrDir;
+
+}
+
+/*------------------------------------------ END OF PART 9: CLOSE FILENAME -------------------------------------------- */
 
 
 
@@ -738,7 +931,6 @@ void rm(unsigned char* file_name){
 			/*store cluster number of file found*/
 			clusterNum = currDir;
 
-			/*DEBUG added check for root being deleted*/
 			/*erase everything in data section of this cluster*/
 			if(clusterNum != 2){
 				wipe_cluster_data(clusterNum);
@@ -751,7 +943,7 @@ void rm(unsigned char* file_name){
 			/*break out of loop if no other clusters remain
 			 * but first set cluster value to 0's*/
 			if(secBuff[0] == 0xFF || secBuff[0] == 0xF8 || secBuff[0] == 0x00){
-				/*DEBUG added check for root being deleted*/
+				/*check so root isn't deleted*/
 				if(clusterNum != 2){
 					delete_cluster(clusterNum);
 				}
@@ -762,7 +954,7 @@ void rm(unsigned char* file_name){
 			currDir = secBuff[1] << 8 | secBuff[0];
 
 			/*0 out previous cluster number before moving on to next one*/	
-			/*DEBUG added check for root being deleted*/
+			/*check that root isn't being deleted*/
 			if(clusterNum != 2){
 				delete_cluster(clusterNum);
 			}
@@ -824,9 +1016,7 @@ void rmdir(unsigned char* dir_name){
 		clusterNum = currDir;
 		emptyFlag = check_if_empty(currDir);
 
-		/*DEBUG should check to see that data in other clusters are empty too
-		 * DEBUG also added firstCluster = currDir here
-		 * and added while loop too*/
+		/*should check to see that data in other clusters are empty too*/
 
 		firstCluster = currDir;
 
@@ -848,16 +1038,8 @@ void rmdir(unsigned char* dir_name){
 			printf("ERROR: dir entry is not empty.\nplease empty before removing.\n");
 		}
 		else{
-			/*remove rest of entries (. and ..) in directory
-			 * DEBUG changed currDir to firstCluster*/
+			/*remove rest of entries (. and ..) in directory*/
 			delete_entries(firstCluster);
-
-			/*remove cluster entry by setting to 0's
-			 * DEBUG should also remove all other cluster entries*/
-			//delete_cluster(clusterNum);
-	
-			/*delete all other clusters this directory occupied, 
-			 * if any, minus the first one*/
 
 			/*see if there's more clusters that follow*/
 			find_next_cluster(firstCluster);		
@@ -882,7 +1064,6 @@ void rmdir(unsigned char* dir_name){
 				delete_cluster(oldCluster);
 			}
 
-			/*DEBUG moved from the top to the bottom*/
 			/*finally 0 out the first cluster*/
 			delete_cluster(firstCluster);
 
@@ -1030,6 +1211,64 @@ int check_if_file(unsigned char* file_name){
 			}
 			return 1; 
 		}			
+		/*if filename found but wasn't a file*/
+		else if((strcmp(tempFileName, file_name) == 0) && FI.attribute != 0x20){
+			return -1;
+		}
+	}
+	/*return 0 at the end if it was never found*/
+	return 0;
+}
+
+int check_if_file2(unsigned char* file_name){
+	/*is practically the same as print_entries
+	 * but with a check for filename comparisons*/
+
+	/*returns 1 for success and sets currDir,
+	 * -1 if entry found but not a directory,
+	 *  and 0 on failure*/
+
+	char* tempFileName;
+
+	/*jump to first data sector of the currDir/cluster number*/
+	unsigned long FirstSectorofCluster = find_first_data_sector() + ((currDir - 2) * BSI.BPB_SecPerClus);
+
+	/*offset of bytes*/
+	int entryNum;
+
+	fseek(fptr, FirstSectorofCluster * BSI.BPB_BytesPerSec, SEEK_SET);
+
+	/*512 bytes for data sector of a cluster and each entry is 64 bytes*/
+	for(entryNum = 0; entryNum < 8; entryNum++){
+
+		/*read the information into an array of entries struct*/
+		fread(&FI, sizeof(struct File_Info), 1, fptr);
+
+		/*if it starts reading in 0s, means no more valid entries, so can break out of loop*/
+		if(FI.attribute == 0x00)
+			break;
+
+		//take out whitespace in filename and set to temp
+		tempFileName = deblank(FI.filename);
+
+		/*if filename found and is a file*/
+		if((strcmp(tempFileName, file_name) == 0) && (FI.attribute == 0x20 || FI.attribute == 0X01 )){
+			/*clusters that point back to root directory are 0 for some reason, 
+			 * so make them 2 for proper navigation.*/
+			if((FI.high_cluster << 16 | FI.low_cluster) == 0){
+				currDir = BSI.BPB_RootClus;
+			}
+			else{
+				currDir = (FI.high_cluster << 16 | FI.low_cluster);
+			}
+
+			if(FI.attribute == 0x01){
+				return 2;
+			}
+			else{
+				return 1;
+			}
+		}
 		/*if filename found but wasn't a file*/
 		else if((strcmp(tempFileName, file_name) == 0) && FI.attribute != 0x20){
 			return -1;
