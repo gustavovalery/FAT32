@@ -7,7 +7,8 @@ All team members met up at the same time and coded together. Mostly it involved 
 
 contents of tar archive:
 Included in the tarball is the proj3.c file which includes the entirety of code for our project. This includes all of the function definitions and main code loop.
-Also included is this README.txt file.
+Also included is this README.txt file, and also an image of the "progress log" for this project.
+*DO BE AWARE that we only used one GitHub account for this project. So while all commits are under Emilio, we all partook in coding the project, but relied on committing with his account only.*
 Lastly, included is the makefile for this project, which compiles the code. To run the code, use "./a.out fat32.img" in the command line. The fat32 image must be passed in as a parameter during execution.
 
 how to compile executables using the makefile:
